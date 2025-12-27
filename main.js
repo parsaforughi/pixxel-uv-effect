@@ -1,10 +1,22 @@
 // UV Face Filter - TikTok Style
 // Zero UI, instant camera access, real-time face tracking with UV color processing
 // DEBUG MODE: Extensive logging and Safari-safe handling
+// CRITICAL: Single getUserMedia call, camera stream never stopped
+
+// Global flag to prevent multiple getUserMedia calls
+window.cameraInitialized = false;
+window.uvFilterInstance = null;
 
 class UVFaceFilter {
     constructor() {
         console.log('[UVFilter] Constructor called');
+        
+        // Prevent multiple instances
+        if (window.uvFilterInstance) {
+            console.warn('[UVFilter] Instance already exists, skipping');
+            return;
+        }
+        window.uvFilterInstance = this;
         
         this.video = document.getElementById('video');
         this.canvas = document.getElementById('canvas');
@@ -20,6 +32,7 @@ class UVFaceFilter {
         this.videoReady = false;
         this.streamActive = false;
         this.mediaPipeReady = false;
+        this.cameraStream = null; // Store stream reference
         
         // Face mesh landmarks for skin segmentation
         this.skinLandmarks = this.getSkinLandmarks();
@@ -81,6 +94,22 @@ class UVFaceFilter {
     
     async init() {
         console.log('[UVFilter] init() called');
+        
+        // CRITICAL: Check global flag - getUserMedia MUST be called exactly ONCE
+        if (window.cameraInitialized === true) {
+            console.log('[UVFilter] CAMERA INIT BLOCKED (SKIPPED) - Already initialized');
+            // If camera already initialized, just setup rendering
+            if (this.video.srcObject) {
+                this.setupVideoListeners();
+                this.videoReady = true;
+                this.streamActive = true;
+                this.startImmediateFallback();
+                this.setupFaceMesh();
+            }
+            return;
+        }
+        
+        console.log('[UVFilter] CAMERA INIT START');
         console.log('[UVFilter] Video element:', this.video);
         console.log('[UVFilter] Canvas element:', this.canvas);
         console.log('[UVFilter] navigator.mediaDevices:', navigator.mediaDevices);
@@ -112,6 +141,12 @@ class UVFaceFilter {
                 console.log(`[UVFilter] Track ${idx}:`, track.kind, track.enabled, track.readyState);
             });
             
+            // CRITICAL: Set global flag IMMEDIATELY after successful getUserMedia
+            window.cameraInitialized = true;
+            console.log('[UVFilter] CAMERA INIT SUCCESS');
+            
+            // Store stream reference - NEVER stop this stream
+            this.cameraStream = stream;
             this.streamActive = true;
             
             console.log('[UVFilter] Setting video.srcObject...');
@@ -127,7 +162,7 @@ class UVFaceFilter {
                 console.error('[UVFilter] video.play() FAILED:', playError);
                 console.error('[UVFilter] Play error name:', playError.name);
                 console.error('[UVFilter] Play error message:', playError.message);
-                // Try again after a delay
+                // Single retry only, no loops
                 setTimeout(async () => {
                     try {
                         await this.video.play();
@@ -147,15 +182,26 @@ class UVFaceFilter {
             console.error('[UVFilter] Error message:', error.message);
             console.error('[UVFilter] Error stack:', error.stack);
             
-            // Activate hard fallback immediately
-            this.activateHardFallback('getUserMedia failed: ' + error.message);
+            // On getUserMedia failure, show error but don't retry
+            this.activateHardFallback('getUserMedia failed: ' + error.message, false);
         }
     }
     
     setupVideoListeners() {
         console.log('[UVFilter] Setting up video event listeners');
         
-        this.video.addEventListener('loadedmetadata', () => {
+        // Remove existing listeners to prevent duplicates
+        this.video.removeEventListener('loadedmetadata', this.onLoadedMetadata);
+        this.video.removeEventListener('canplay', this.onCanPlay);
+        this.video.removeEventListener('play', this.onPlay);
+        this.video.removeEventListener('playing', this.onPlaying);
+        this.video.removeEventListener('pause', this.onPause);
+        this.video.removeEventListener('error', this.onVideoError);
+        this.video.removeEventListener('stalled', this.onStalled);
+        this.video.removeEventListener('waiting', this.onWaiting);
+        
+        // Create bound handlers
+        this.onLoadedMetadata = () => {
             console.log('[UVFilter] EVENT: loadedmetadata');
             console.log('[UVFilter] video.videoWidth:', this.video.videoWidth);
             console.log('[UVFilter] video.videoHeight:', this.video.videoHeight);
@@ -178,44 +224,55 @@ class UVFaceFilter {
                 this.setupFaceMesh();
             } else {
                 console.error('[UVFilter] ERROR: Video dimensions are zero!');
-                this.activateHardFallback('Video dimensions are zero');
+                this.activateHardFallback('Video dimensions are zero', false);
             }
-        });
+        };
         
-        this.video.addEventListener('canplay', () => {
+        this.onCanPlay = () => {
             console.log('[UVFilter] EVENT: canplay');
             console.log('[UVFilter] video.readyState:', this.video.readyState);
-        });
+        };
         
-        this.video.addEventListener('play', () => {
+        this.onPlay = () => {
             console.log('[UVFilter] EVENT: play');
             console.log('[UVFilter] video.paused:', this.video.paused);
             console.log('[UVFilter] video.ended:', this.video.ended);
-        });
+        };
         
-        this.video.addEventListener('playing', () => {
+        this.onPlaying = () => {
             console.log('[UVFilter] EVENT: playing');
-        });
+        };
         
-        this.video.addEventListener('pause', () => {
+        this.onPause = () => {
             console.log('[UVFilter] EVENT: pause');
-        });
+        };
         
-        this.video.addEventListener('error', (e) => {
+        this.onVideoError = (e) => {
             console.error('[UVFilter] EVENT: video error');
             console.error('[UVFilter] Video error code:', this.video.error?.code);
             console.error('[UVFilter] Video error message:', this.video.error?.message);
             console.error('[UVFilter] Event:', e);
-            this.activateHardFallback('Video error event');
-        });
+            // Don't stop camera on video error, just switch to fallback rendering
+            this.activateHardFallback('Video error event', false);
+        };
         
-        this.video.addEventListener('stalled', () => {
+        this.onStalled = () => {
             console.warn('[UVFilter] EVENT: video stalled');
-        });
+        };
         
-        this.video.addEventListener('waiting', () => {
+        this.onWaiting = () => {
             console.warn('[UVFilter] EVENT: video waiting');
-        });
+        };
+        
+        // Add listeners
+        this.video.addEventListener('loadedmetadata', this.onLoadedMetadata);
+        this.video.addEventListener('canplay', this.onCanPlay);
+        this.video.addEventListener('play', this.onPlay);
+        this.video.addEventListener('playing', this.onPlaying);
+        this.video.addEventListener('pause', this.onPause);
+        this.video.addEventListener('error', this.onVideoError);
+        this.video.addEventListener('stalled', this.onStalled);
+        this.video.addEventListener('waiting', this.onWaiting);
     }
     
     setupCanvas() {
@@ -263,8 +320,8 @@ class UVFaceFilter {
         
         if (typeof FaceMesh === 'undefined') {
             console.error('[UVFilter] ERROR: MediaPipe FaceMesh not loaded');
-            console.error('[UVFilter] Activating fallback mode');
-            this.activateHardFallback('MediaPipe FaceMesh not loaded');
+            console.error('[UVFilter] Switching to fallback rendering (camera stays alive)');
+            this.activateHardFallback('MediaPipe FaceMesh not loaded', false);
             return;
         }
         
@@ -299,8 +356,8 @@ class UVFaceFilter {
             this.faceMeshLoadTimeout = setTimeout(() => {
                 if (this.lastFaceDetected === 0) {
                     console.warn('[UVFilter] WARNING: FaceMesh timeout - no face detected after 5 seconds');
-                    console.warn('[UVFilter] Activating fallback mode');
-                    this.activateHardFallback('FaceMesh timeout - no face detected');
+                    console.warn('[UVFilter] Switching to fallback rendering (camera stays alive)');
+                    this.activateHardFallback('FaceMesh timeout - no face detected', false);
                 }
             }, 5000);
             
@@ -323,7 +380,7 @@ class UVFaceFilter {
                                         console.error('[UVFilter] FaceMesh.send() ERROR:', error);
                                         this.faceMeshFailCount++;
                                         if (this.faceMeshFailCount >= this.maxFaceMeshFailures) {
-                                            this.activateHardFallback('FaceMesh send failures exceeded');
+                                            this.activateHardFallback('FaceMesh send failures exceeded', false);
                                         }
                                     }
                                     this.isProcessing = false;
@@ -341,21 +398,25 @@ class UVFaceFilter {
                     this.mediaPipeReady = true;
                 } else {
                     console.error('[UVFilter] ERROR: Cannot start Camera - invalid video dimensions');
-                    this.activateHardFallback('Invalid video dimensions for Camera');
+                    this.activateHardFallback('Invalid video dimensions for Camera', false);
                 }
             } else {
                 console.error('[UVFilter] ERROR: Camera utility not available');
-                this.activateHardFallback('Camera utility not available');
+                this.activateHardFallback('Camera utility not available', false);
             }
         } catch (error) {
             console.error('[UVFilter] ERROR in setupFaceMesh:', error);
             console.error('[UVFilter] Error stack:', error.stack);
-            this.activateHardFallback('setupFaceMesh error: ' + error.message);
+            this.activateHardFallback('setupFaceMesh error: ' + error.message, false);
         }
     }
     
     startImmediateFallback() {
         console.log('[UVFilter] startImmediateFallback() called');
+        if (this.fallbackActive) {
+            console.log('[UVFilter] Fallback already active, skipping');
+            return;
+        }
         this.fallbackActive = true;
         
         const drawFrame = () => {
@@ -376,30 +437,40 @@ class UVFaceFilter {
         drawFrame();
     }
     
-    activateHardFallback(reason) {
+    activateHardFallback(reason, stopMediaPipeOnly = true) {
         console.error('[UVFilter] activateHardFallback() called - reason:', reason);
+        console.error('[UVFilter] stopMediaPipeOnly:', stopMediaPipeOnly);
         this.fallbackActive = true;
         
         if (this.faceMeshLoadTimeout) {
             clearTimeout(this.faceMeshLoadTimeout);
+            this.faceMeshLoadTimeout = null;
         }
         
-        // Stop MediaPipe processing
-        if (this.camera) {
+        // CRITICAL: Only stop MediaPipe processing, NEVER stop camera stream
+        if (this.camera && stopMediaPipeOnly) {
             try {
+                // Stop MediaPipe Camera utility (this does NOT stop the video stream)
                 this.camera.stop();
-                console.log('[UVFilter] Camera stopped');
+                console.log('[UVFilter] MediaPipe Camera utility stopped (stream remains alive)');
             } catch (e) {
-                console.error('[UVFilter] Error stopping camera:', e);
+                console.error('[UVFilter] Error stopping MediaPipe camera utility:', e);
             }
         }
+        
+        // CRITICAL: NEVER stop the camera stream tracks
+        // DO NOT call: stream.getTracks().forEach(track => track.stop())
+        // DO NOT call: this.video.srcObject = null
+        // The stream MUST remain alive
+        
+        console.log('[UVFilter] Camera stream remains active - switching to fallback rendering only');
         
         // Start raw video rendering
         const drawFrame = () => {
             try {
                 if (this.video && this.video.readyState >= this.video.HAVE_CURRENT_DATA && this.video.videoWidth > 0) {
                     this.drawRawVideoFrame();
-                    this.drawDebugOverlay('FALLBACK MODE ACTIVE: ' + reason);
+                    this.drawDebugOverlay('FALLBACK MODE: ' + reason);
                 } else {
                     this.drawDebugOverlay('FALLBACK: ' + reason + ' | Video not ready');
                 }
@@ -902,6 +973,13 @@ window.addEventListener('load', () => {
     console.log('[UVFilter] Window load event fired');
     console.log('[UVFilter] typeof FaceMesh:', typeof FaceMesh);
     console.log('[UVFilter] typeof Camera:', typeof Camera);
+    console.log('[UVFilter] window.cameraInitialized:', window.cameraInitialized);
+    
+    // Prevent multiple instances
+    if (window.uvFilterInstance) {
+        console.warn('[UVFilter] Instance already exists, skipping initialization');
+        return;
+    }
     
     // Give MediaPipe scripts time to initialize
     setTimeout(() => {
