@@ -955,7 +955,7 @@ class UVFaceFilter {
     
     createEyeMask(landmarks, width, height) {
         const mask = new Float32Array(width * height);
-        const eyeIndices = [...this.eyeLandmarks.left, ...this.eyebrowLandmarks.right];
+        const eyeIndices = [...this.eyeLandmarks.left, ...this.eyeLandmarks.right];
         
         const eyePoints = eyeIndices
             .filter(idx => idx < landmarks.length)
