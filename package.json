@@ -1,0 +1,14 @@
+{
+  "name": "uv-face-filter",
+  "version": "1.0.0",
+  "description": "TikTok-style UV face filter web app",
+  "type": "module",
+  "scripts": {
+    "dev": "python3 -m http.server 8000",
+    "start": "python3 -m http.server 8000"
+  },
+  "keywords": ["face-filter", "uv-filter", "camera", "web"],
+  "author": "",
+  "license": "MIT"
+}
+
