@@ -1,8 +1,11 @@
 // UV Face Filter - TikTok Style
 // Zero UI, instant camera access, real-time face tracking with UV color processing
+// DEBUG MODE: Extensive logging and Safari-safe handling
 
 class UVFaceFilter {
     constructor() {
+        console.log('[UVFilter] Constructor called');
+        
         this.video = document.getElementById('video');
         this.canvas = document.getElementById('canvas');
         this.ctx = this.canvas.getContext('2d');
@@ -10,6 +13,13 @@ class UVFaceFilter {
         this.camera = null;
         this.isProcessing = false;
         this.animationFrame = null;
+        this.frameCount = 0;
+        this.lastLogTime = 0;
+        this.fallbackActive = false;
+        this.faceMeshLoadTimeout = null;
+        this.videoReady = false;
+        this.streamActive = false;
+        this.mediaPipeReady = false;
         
         // Face mesh landmarks for skin segmentation
         this.skinLandmarks = this.getSkinLandmarks();
@@ -17,29 +27,29 @@ class UVFaceFilter {
         this.lipLandmarks = this.getLipLandmarks();
         this.eyebrowLandmarks = this.getEyebrowLandmarks();
         
-        // Performance optimization - use smaller canvas for processing
+        // Performance optimization
         this.processingScale = 0.75;
         this.lastFrameTime = 0;
         this.targetFPS = 30;
         this.frameInterval = 1000 / this.targetFPS;
         
+        // Debug state
+        this.debugMode = true;
+        this.lastFaceDetected = 0;
+        this.faceMeshFailCount = 0;
+        this.maxFaceMeshFailures = 10;
+        
+        console.log('[UVFilter] Initializing...');
         this.init();
     }
     
     getSkinLandmarks() {
-        // Face mesh has 468 landmarks
-        // Exclude eyes, eyebrows, and lips
         const allLandmarks = Array.from({ length: 468 }, (_, i) => i);
         const exclude = [
-            // Left eye
             33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246,
-            // Right eye
             362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398,
-            // Left eyebrow
             107, 55, 65, 52, 53, 46, 70, 63, 105, 66, 69,
-            // Right eyebrow
             336, 296, 334, 293, 300, 276, 283, 282, 295, 285, 336,
-            // Lips
             61, 146, 91, 181, 84, 17, 314, 405, 320, 307, 375, 321, 308, 324, 318,
             13, 82, 81, 80, 78, 95, 88, 178, 87, 14, 317, 402, 318, 324,
             12, 268, 271, 272, 407, 415, 310, 311, 312, 13, 82, 81, 80, 78
@@ -70,35 +80,158 @@ class UVFaceFilter {
     }
     
     async init() {
+        console.log('[UVFilter] init() called');
+        console.log('[UVFilter] Video element:', this.video);
+        console.log('[UVFilter] Canvas element:', this.canvas);
+        console.log('[UVFilter] navigator.mediaDevices:', navigator.mediaDevices);
+        
+        // Setup video event listeners FIRST
+        this.setupVideoListeners();
+        
         try {
-            // Request camera immediately - no UI, instant request
-            const stream = await navigator.mediaDevices.getUserMedia({
+            console.log('[UVFilter] BEFORE getUserMedia call');
+            console.log('[UVFilter] User agent:', navigator.userAgent);
+            
+            // Safari-safe constraints
+            const constraints = {
                 video: {
                     facingMode: 'user',
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
+                    width: { ideal: 640 },
+                    height: { ideal: 480 }
                 }
+            };
+            
+            console.log('[UVFilter] Requesting camera with constraints:', JSON.stringify(constraints));
+            
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            
+            console.log('[UVFilter] getUserMedia SUCCESS - stream received');
+            console.log('[UVFilter] Stream active:', stream.active);
+            console.log('[UVFilter] Stream tracks:', stream.getTracks().length);
+            stream.getTracks().forEach((track, idx) => {
+                console.log(`[UVFilter] Track ${idx}:`, track.kind, track.enabled, track.readyState);
             });
             
+            this.streamActive = true;
+            
+            console.log('[UVFilter] Setting video.srcObject...');
             this.video.srcObject = stream;
+            console.log('[UVFilter] video.srcObject set, value:', this.video.srcObject);
             
-            // Wait for video to be ready
-            this.video.addEventListener('loadedmetadata', () => {
-                this.setupCanvas();
-                this.setupFaceMesh();
-            });
+            // Safari requires explicit play() call
+            console.log('[UVFilter] Attempting video.play()...');
+            try {
+                await this.video.play();
+                console.log('[UVFilter] video.play() SUCCESS');
+            } catch (playError) {
+                console.error('[UVFilter] video.play() FAILED:', playError);
+                console.error('[UVFilter] Play error name:', playError.name);
+                console.error('[UVFilter] Play error message:', playError.message);
+                // Try again after a delay
+                setTimeout(async () => {
+                    try {
+                        await this.video.play();
+                        console.log('[UVFilter] video.play() SUCCESS on retry');
+                    } catch (retryError) {
+                        console.error('[UVFilter] video.play() FAILED on retry:', retryError);
+                    }
+                }, 500);
+            }
+            
+            // Wait for video metadata
+            console.log('[UVFilter] Waiting for video metadata...');
             
         } catch (error) {
-            console.error('Camera access denied:', error);
-            // Still show black screen (no UI)
+            console.error('[UVFilter] getUserMedia ERROR:', error);
+            console.error('[UVFilter] Error name:', error.name);
+            console.error('[UVFilter] Error message:', error.message);
+            console.error('[UVFilter] Error stack:', error.stack);
+            
+            // Activate hard fallback immediately
+            this.activateHardFallback('getUserMedia failed: ' + error.message);
         }
     }
     
+    setupVideoListeners() {
+        console.log('[UVFilter] Setting up video event listeners');
+        
+        this.video.addEventListener('loadedmetadata', () => {
+            console.log('[UVFilter] EVENT: loadedmetadata');
+            console.log('[UVFilter] video.videoWidth:', this.video.videoWidth);
+            console.log('[UVFilter] video.videoHeight:', this.video.videoHeight);
+            console.log('[UVFilter] video.readyState:', this.video.readyState);
+            console.log('[UVFilter] video.HAVE_METADATA:', this.video.HAVE_METADATA);
+            console.log('[UVFilter] video.HAVE_CURRENT_DATA:', this.video.HAVE_CURRENT_DATA);
+            console.log('[UVFilter] video.HAVE_ENOUGH_DATA:', this.video.HAVE_ENOUGH_DATA);
+            
+            if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
+                this.setupCanvas();
+                this.videoReady = true;
+                
+                // Start fallback render loop immediately
+                if (!this.fallbackActive && !this.mediaPipeReady) {
+                    console.log('[UVFilter] Starting immediate fallback render loop');
+                    this.startImmediateFallback();
+                }
+                
+                // Setup FaceMesh after canvas is ready
+                this.setupFaceMesh();
+            } else {
+                console.error('[UVFilter] ERROR: Video dimensions are zero!');
+                this.activateHardFallback('Video dimensions are zero');
+            }
+        });
+        
+        this.video.addEventListener('canplay', () => {
+            console.log('[UVFilter] EVENT: canplay');
+            console.log('[UVFilter] video.readyState:', this.video.readyState);
+        });
+        
+        this.video.addEventListener('play', () => {
+            console.log('[UVFilter] EVENT: play');
+            console.log('[UVFilter] video.paused:', this.video.paused);
+            console.log('[UVFilter] video.ended:', this.video.ended);
+        });
+        
+        this.video.addEventListener('playing', () => {
+            console.log('[UVFilter] EVENT: playing');
+        });
+        
+        this.video.addEventListener('pause', () => {
+            console.log('[UVFilter] EVENT: pause');
+        });
+        
+        this.video.addEventListener('error', (e) => {
+            console.error('[UVFilter] EVENT: video error');
+            console.error('[UVFilter] Video error code:', this.video.error?.code);
+            console.error('[UVFilter] Video error message:', this.video.error?.message);
+            console.error('[UVFilter] Event:', e);
+            this.activateHardFallback('Video error event');
+        });
+        
+        this.video.addEventListener('stalled', () => {
+            console.warn('[UVFilter] EVENT: video stalled');
+        });
+        
+        this.video.addEventListener('waiting', () => {
+            console.warn('[UVFilter] EVENT: video waiting');
+        });
+    }
+    
     setupCanvas() {
+        console.log('[UVFilter] setupCanvas() called');
+        
+        if (!this.video.videoWidth || !this.video.videoHeight) {
+            console.error('[UVFilter] ERROR: Cannot setup canvas - video dimensions invalid');
+            return;
+        }
+        
         const videoWidth = this.video.videoWidth;
         const videoHeight = this.video.videoHeight;
         
-        // Set canvas to full screen but maintain aspect ratio
+        console.log('[UVFilter] Video dimensions:', videoWidth, 'x', videoHeight);
+        console.log('[UVFilter] Window dimensions:', window.innerWidth, 'x', window.innerHeight);
+        
         const windowWidth = window.innerWidth;
         const windowHeight = window.innerHeight;
         
@@ -113,183 +246,375 @@ class UVFaceFilter {
             this.canvas.height = windowHeight;
         }
         
-        // Center canvas
+        console.log('[UVFilter] Canvas dimensions set to:', this.canvas.width, 'x', this.canvas.height);
+        
         this.canvas.style.width = '100vw';
         this.canvas.style.height = '100vh';
         this.canvas.style.objectFit = 'cover';
+        
+        // Draw initial debug rectangle
+        this.drawDebugOverlay('CANVAS SETUP OK');
     }
     
     setupFaceMesh() {
+        console.log('[UVFilter] setupFaceMesh() called');
+        console.log('[UVFilter] typeof FaceMesh:', typeof FaceMesh);
+        console.log('[UVFilter] typeof Camera:', typeof Camera);
+        
         if (typeof FaceMesh === 'undefined') {
-            console.error('MediaPipe FaceMesh not loaded');
-            // Fallback: show inverted video
-            this.startFallback();
+            console.error('[UVFilter] ERROR: MediaPipe FaceMesh not loaded');
+            console.error('[UVFilter] Activating fallback mode');
+            this.activateHardFallback('MediaPipe FaceMesh not loaded');
             return;
         }
         
-        this.faceMesh = new FaceMesh({
-            locateFile: (file) => {
-                return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
-            }
-        });
-        
-        this.faceMesh.setOptions({
-            maxNumFaces: 1,
-            refineLandmarks: true,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
-        });
-        
-        this.faceMesh.onResults((results) => {
-            this.processFrame(results);
-        });
-        
-        // Initialize camera with face mesh
-        if (typeof Camera !== 'undefined') {
-            this.camera = new Camera(this.video, {
-                onFrame: async () => {
-                    const now = performance.now();
-                    if (now - this.lastFrameTime >= this.frameInterval) {
-                        this.lastFrameTime = now;
-                        if (!this.isProcessing && this.faceMesh) {
-                            this.isProcessing = true;
-                            await this.faceMesh.send({ image: this.video });
-                            this.isProcessing = false;
-                        }
-                    }
-                },
-                width: this.video.videoWidth,
-                height: this.video.videoHeight
+        try {
+            console.log('[UVFilter] Creating FaceMesh instance...');
+            this.faceMesh = new FaceMesh({
+                locateFile: (file) => {
+                    const url = `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+                    console.log('[UVFilter] MediaPipe loading file:', url);
+                    return url;
+                }
             });
             
-            this.camera.start();
-        } else {
-            // Fallback if Camera utility not available
-            this.startFallback();
+            console.log('[UVFilter] FaceMesh instance created');
+            
+            this.faceMesh.setOptions({
+                maxNumFaces: 1,
+                refineLandmarks: true,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+            
+            console.log('[UVFilter] FaceMesh options set');
+            
+            this.faceMesh.onResults((results) => {
+                this.processFrame(results);
+            });
+            
+            console.log('[UVFilter] FaceMesh onResults handler set');
+            
+            // Set timeout for FaceMesh to start working
+            this.faceMeshLoadTimeout = setTimeout(() => {
+                if (this.lastFaceDetected === 0) {
+                    console.warn('[UVFilter] WARNING: FaceMesh timeout - no face detected after 5 seconds');
+                    console.warn('[UVFilter] Activating fallback mode');
+                    this.activateHardFallback('FaceMesh timeout - no face detected');
+                }
+            }, 5000);
+            
+            // Initialize camera with face mesh
+            if (typeof Camera !== 'undefined') {
+                console.log('[UVFilter] Camera utility available, initializing...');
+                console.log('[UVFilter] Video dimensions for Camera:', this.video.videoWidth, 'x', this.video.videoHeight);
+                
+                if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
+                    this.camera = new Camera(this.video, {
+                        onFrame: async () => {
+                            const now = performance.now();
+                            if (now - this.lastFrameTime >= this.frameInterval) {
+                                this.lastFrameTime = now;
+                                if (!this.isProcessing && this.faceMesh && this.video.readyState >= this.video.HAVE_CURRENT_DATA) {
+                                    this.isProcessing = true;
+                                    try {
+                                        await this.faceMesh.send({ image: this.video });
+                                    } catch (error) {
+                                        console.error('[UVFilter] FaceMesh.send() ERROR:', error);
+                                        this.faceMeshFailCount++;
+                                        if (this.faceMeshFailCount >= this.maxFaceMeshFailures) {
+                                            this.activateHardFallback('FaceMesh send failures exceeded');
+                                        }
+                                    }
+                                    this.isProcessing = false;
+                                }
+                            }
+                        },
+                        width: this.video.videoWidth,
+                        height: this.video.videoHeight
+                    });
+                    
+                    console.log('[UVFilter] Camera instance created');
+                    
+                    this.camera.start();
+                    console.log('[UVFilter] Camera.start() called');
+                    this.mediaPipeReady = true;
+                } else {
+                    console.error('[UVFilter] ERROR: Cannot start Camera - invalid video dimensions');
+                    this.activateHardFallback('Invalid video dimensions for Camera');
+                }
+            } else {
+                console.error('[UVFilter] ERROR: Camera utility not available');
+                this.activateHardFallback('Camera utility not available');
+            }
+        } catch (error) {
+            console.error('[UVFilter] ERROR in setupFaceMesh:', error);
+            console.error('[UVFilter] Error stack:', error.stack);
+            this.activateHardFallback('setupFaceMesh error: ' + error.message);
         }
     }
     
-    startFallback() {
-        // Fallback: just show inverted video without face tracking
+    startImmediateFallback() {
+        console.log('[UVFilter] startImmediateFallback() called');
+        this.fallbackActive = true;
+        
         const drawFrame = () => {
-            if (this.video.readyState === this.video.HAVE_ENOUGH_DATA) {
-                this.drawInvertedFrame();
+            try {
+                if (this.video.readyState >= this.video.HAVE_CURRENT_DATA) {
+                    this.drawRawVideoFrame();
+                } else {
+                    this.drawDebugOverlay('WAITING FOR VIDEO DATA...');
+                }
+                this.animationFrame = requestAnimationFrame(drawFrame);
+            } catch (error) {
+                console.error('[UVFilter] ERROR in fallback drawFrame:', error);
+                this.drawDebugOverlay('FALLBACK ERROR: ' + error.message);
+                this.animationFrame = requestAnimationFrame(drawFrame);
             }
-            this.animationFrame = requestAnimationFrame(drawFrame);
         };
+        
         drawFrame();
     }
     
-    processFrame(results) {
-        if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-            // No face detected - show inverted video
-            this.drawInvertedFrame();
-            return;
+    activateHardFallback(reason) {
+        console.error('[UVFilter] activateHardFallback() called - reason:', reason);
+        this.fallbackActive = true;
+        
+        if (this.faceMeshLoadTimeout) {
+            clearTimeout(this.faceMeshLoadTimeout);
         }
         
-        const landmarks = results.multiFaceLandmarks[0];
-        this.applyUVFilter(landmarks);
-    }
-    
-    drawInvertedFrame() {
-        this.ctx.save();
-        this.ctx.scale(-1, 1);
-        this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
-        this.ctx.restore();
-        
-        // Apply global invert
-        const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
-        this.invertColors(imageData);
-        this.ctx.putImageData(imageData, 0, 0);
-    }
-    
-    applyUVFilter(landmarks) {
-        // Draw video frame (mirrored)
-        this.ctx.save();
-        this.ctx.scale(-1, 1);
-        this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
-        this.ctx.restore();
-        
-        // Get image data for processing
-        const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
-        const data = imageData.data;
-        
-        // Create masks for different facial regions
-        const skinMask = this.createSkinMask(landmarks, this.canvas.width, this.canvas.height);
-        const eyeMask = this.createEyeMask(landmarks, this.canvas.width, this.canvas.height);
-        const lipMask = this.createLipMask(landmarks, this.canvas.width, this.canvas.height);
-        const eyebrowMask = this.createEyebrowMask(landmarks, this.canvas.width, this.canvas.height);
-        
-        // Apply UV color processing
-        for (let i = 0; i < data.length; i += 4) {
-            const x = (i / 4) % this.canvas.width;
-            const y = Math.floor((i / 4) / this.canvas.width);
-            
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
-            
-            // Check pixel location in masks
-            const idx = Math.floor(y) * this.canvas.width + Math.floor(x);
-            const skinValue = skinMask[idx] || 0;
-            const eyeValue = eyeMask[idx] || 0;
-            const lipValue = lipMask[idx] || 0;
-            const eyebrowValue = eyebrowMask[idx] || 0;
-            
-            // Priority: eyes > lips > eyebrows > skin > background
-            if (eyeValue > 0.1) {
-                // Eye area - near white
-                const inverted = this.invertPixel(r, g, b);
-                const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'eye');
-                data[i] = uvColor.r;
-                data[i + 1] = uvColor.g;
-                data[i + 2] = uvColor.b;
-            } else if (lipValue > 0.1) {
-                // Lip area - greenish tone
-                const inverted = this.invertPixel(r, g, b);
-                const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'lip');
-                data[i] = uvColor.r;
-                data[i + 1] = uvColor.g;
-                data[i + 2] = uvColor.b;
-            } else if (eyebrowValue > 0.1) {
-                // Eyebrow - minimal effect, slightly lighter
-                const inverted = this.invertPixel(r, g, b);
-                const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'hair');
-                data[i] = this.lerp(r, uvColor.r, 0.3);
-                data[i + 1] = this.lerp(g, uvColor.g, 0.3);
-                data[i + 2] = this.lerp(b, uvColor.b, 0.3);
-            } else if (skinValue > 0.1) {
-                // Skin area - apply UV blue/cyan effect
-                const inverted = this.invertPixel(r, g, b);
-                const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'skin');
-                // Blend based on mask strength
-                const blend = skinValue;
-                data[i] = this.lerp(r, uvColor.r, blend);
-                data[i + 1] = this.lerp(g, uvColor.g, blend);
-                data[i + 2] = this.lerp(b, uvColor.b, blend);
-            } else {
-                // Background - invert and apply hair effect (white/light)
-                const inverted = this.invertPixel(r, g, b);
-                const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'hair');
-                data[i] = uvColor.r;
-                data[i + 1] = uvColor.g;
-                data[i + 2] = uvColor.b;
+        // Stop MediaPipe processing
+        if (this.camera) {
+            try {
+                this.camera.stop();
+                console.log('[UVFilter] Camera stopped');
+            } catch (e) {
+                console.error('[UVFilter] Error stopping camera:', e);
             }
         }
         
-        // Apply aggressive contrast
-        this.applyContrast(imageData, 1.8);
+        // Start raw video rendering
+        const drawFrame = () => {
+            try {
+                if (this.video && this.video.readyState >= this.video.HAVE_CURRENT_DATA && this.video.videoWidth > 0) {
+                    this.drawRawVideoFrame();
+                    this.drawDebugOverlay('FALLBACK MODE ACTIVE: ' + reason);
+                } else {
+                    this.drawDebugOverlay('FALLBACK: ' + reason + ' | Video not ready');
+                }
+                this.animationFrame = requestAnimationFrame(drawFrame);
+            } catch (error) {
+                console.error('[UVFilter] ERROR in hard fallback drawFrame:', error);
+                this.drawDebugOverlay('FALLBACK ERROR: ' + error.message);
+                this.animationFrame = requestAnimationFrame(drawFrame);
+            }
+        };
         
-        // Apply soft edge blur at mask boundaries
-        this.applySoftBlur(imageData, skinMask, 2);
-        
-        this.ctx.putImageData(imageData, 0, 0);
+        drawFrame();
+    }
+    
+    drawRawVideoFrame() {
+        try {
+            if (!this.ctx || !this.video) return;
+            
+            // Clear canvas
+            this.ctx.fillStyle = '#000';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            
+            // Draw video (mirrored)
+            this.ctx.save();
+            this.ctx.scale(-1, 1);
+            this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
+            this.ctx.restore();
+            
+            // Draw debug rectangle
+            this.ctx.strokeStyle = '#ff0000';
+            this.ctx.lineWidth = 3;
+            this.ctx.strokeRect(10, 10, 100, 50);
+            
+            this.frameCount++;
+            
+            // Log every 60 frames
+            if (this.frameCount % 60 === 0) {
+                const now = performance.now();
+                if (now - this.lastLogTime > 1000) {
+                    console.log('[UVFilter] Frame', this.frameCount, '- Video readyState:', this.video.readyState, '- Dimensions:', this.video.videoWidth, 'x', this.video.videoHeight);
+                    this.lastLogTime = now;
+                }
+            }
+        } catch (error) {
+            console.error('[UVFilter] ERROR in drawRawVideoFrame:', error);
+        }
+    }
+    
+    drawDebugOverlay(text) {
+        try {
+            if (!this.ctx) return;
+            
+            // Draw red rectangle
+            this.ctx.strokeStyle = '#ff0000';
+            this.ctx.lineWidth = 3;
+            this.ctx.strokeRect(10, 10, 200, 100);
+            
+            // Draw text
+            this.ctx.fillStyle = '#ffffff';
+            this.ctx.font = '16px Arial';
+            this.ctx.fillText('VIDEO OK', 20, 35);
+            this.ctx.fillText('FRAME OK', 20, 55);
+            
+            if (this.mediaPipeReady) {
+                this.ctx.fillText('FACEMESH OK', 20, 75);
+            } else {
+                this.ctx.fillText('FACEMESH: ' + (typeof FaceMesh !== 'undefined' ? 'LOADING' : 'FAILED'), 20, 75);
+            }
+            
+            if (text) {
+                this.ctx.fillText(text.substring(0, 40), 20, 95);
+            }
+        } catch (error) {
+            console.error('[UVFilter] ERROR in drawDebugOverlay:', error);
+        }
+    }
+    
+    processFrame(results) {
+        try {
+            if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+                // No face detected - show inverted video
+                this.drawInvertedFrame();
+                return;
+            }
+            
+            this.lastFaceDetected = Date.now();
+            if (this.faceMeshLoadTimeout) {
+                clearTimeout(this.faceMeshLoadTimeout);
+                this.faceMeshLoadTimeout = null;
+            }
+            
+            const landmarks = results.multiFaceLandmarks[0];
+            this.applyUVFilter(landmarks);
+        } catch (error) {
+            console.error('[UVFilter] ERROR in processFrame:', error);
+            this.drawInvertedFrame();
+        }
+    }
+    
+    drawInvertedFrame() {
+        try {
+            if (!this.ctx || !this.video || this.video.readyState < this.video.HAVE_CURRENT_DATA) {
+                return;
+            }
+            
+            this.ctx.save();
+            this.ctx.scale(-1, 1);
+            this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
+            this.ctx.restore();
+            
+            // Apply global invert
+            const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+            this.invertColors(imageData);
+            this.ctx.putImageData(imageData, 0, 0);
+            
+            // Draw debug overlay
+            this.drawDebugOverlay('INVERTED MODE');
+        } catch (error) {
+            console.error('[UVFilter] ERROR in drawInvertedFrame:', error);
+        }
+    }
+    
+    applyUVFilter(landmarks) {
+        try {
+            if (!this.ctx || !this.video || this.video.readyState < this.video.HAVE_CURRENT_DATA) {
+                return;
+            }
+            
+            // Draw video frame (mirrored)
+            this.ctx.save();
+            this.ctx.scale(-1, 1);
+            this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
+            this.ctx.restore();
+            
+            // Get image data for processing
+            const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+            const data = imageData.data;
+            
+            // Create masks for different facial regions
+            const skinMask = this.createSkinMask(landmarks, this.canvas.width, this.canvas.height);
+            const eyeMask = this.createEyeMask(landmarks, this.canvas.width, this.canvas.height);
+            const lipMask = this.createLipMask(landmarks, this.canvas.width, this.canvas.height);
+            const eyebrowMask = this.createEyebrowMask(landmarks, this.canvas.width, this.canvas.height);
+            
+            // Apply UV color processing
+            for (let i = 0; i < data.length; i += 4) {
+                const x = (i / 4) % this.canvas.width;
+                const y = Math.floor((i / 4) / this.canvas.width);
+                
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+                
+                // Check pixel location in masks
+                const idx = Math.floor(y) * this.canvas.width + Math.floor(x);
+                const skinValue = skinMask[idx] || 0;
+                const eyeValue = eyeMask[idx] || 0;
+                const lipValue = lipMask[idx] || 0;
+                const eyebrowValue = eyebrowMask[idx] || 0;
+                
+                // Priority: eyes > lips > eyebrows > skin > background
+                if (eyeValue > 0.1) {
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'eye');
+                    data[i] = uvColor.r;
+                    data[i + 1] = uvColor.g;
+                    data[i + 2] = uvColor.b;
+                } else if (lipValue > 0.1) {
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'lip');
+                    data[i] = uvColor.r;
+                    data[i + 1] = uvColor.g;
+                    data[i + 2] = uvColor.b;
+                } else if (eyebrowValue > 0.1) {
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'hair');
+                    data[i] = this.lerp(r, uvColor.r, 0.3);
+                    data[i + 1] = this.lerp(g, uvColor.g, 0.3);
+                    data[i + 2] = this.lerp(b, uvColor.b, 0.3);
+                } else if (skinValue > 0.1) {
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'skin');
+                    const blend = skinValue;
+                    data[i] = this.lerp(r, uvColor.r, blend);
+                    data[i + 1] = this.lerp(g, uvColor.g, blend);
+                    data[i + 2] = this.lerp(b, uvColor.b, blend);
+                } else {
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'hair');
+                    data[i] = uvColor.r;
+                    data[i + 1] = uvColor.g;
+                    data[i + 2] = uvColor.b;
+                }
+            }
+            
+            // Apply aggressive contrast
+            this.applyContrast(imageData, 1.8);
+            
+            // Apply soft edge blur at mask boundaries
+            this.applySoftBlur(imageData, skinMask, 2);
+            
+            this.ctx.putImageData(imageData, 0, 0);
+            
+            // Draw debug overlay
+            this.drawDebugOverlay('UV FILTER ACTIVE');
+            
+            this.frameCount++;
+        } catch (error) {
+            console.error('[UVFilter] ERROR in applyUVFilter:', error);
+            this.drawInvertedFrame();
+        }
     }
     
     createSkinMask(landmarks, width, height) {
         const mask = new Float32Array(width * height);
-        
-        // Create polygon from skin landmarks
         const skinPoints = this.skinLandmarks.map(idx => {
             if (idx < landmarks.length) {
                 const landmark = landmarks[idx];
@@ -303,31 +628,13 @@ class UVFaceFilter {
         
         if (skinPoints.length === 0) return mask;
         
-        // Use canvas path for faster polygon filling
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = width;
-        tempCanvas.height = height;
-        const tempCtx = tempCanvas.getContext('2d');
-        
-        // Draw polygon with gradient falloff
-        tempCtx.beginPath();
-        tempCtx.moveTo(skinPoints[0].x, skinPoints[0].y);
-        for (let i = 1; i < skinPoints.length; i++) {
-            tempCtx.lineTo(skinPoints[i].x, skinPoints[i].y);
-        }
-        tempCtx.closePath();
-        tempCtx.fillStyle = 'white';
-        tempCtx.fill();
-        
-        // Apply distance-based falloff more efficiently
-        const step = 2; // Sample every 2 pixels for performance
+        const step = 2;
         for (let y = 0; y < height; y += step) {
             for (let x = 0; x < width; x += step) {
                 const dist = this.distanceToPolygon(x, y, skinPoints);
                 const value = Math.max(0, 1 - dist / 60);
                 const idx = y * width + x;
                 mask[idx] = value;
-                // Fill neighboring pixels with same value for smoother result
                 if (x + 1 < width) mask[idx + 1] = value;
                 if (y + 1 < height) mask[(y + 1) * width + x] = value;
             }
@@ -352,12 +659,11 @@ class UVFaceFilter {
         
         if (eyePoints.length === 0) return mask;
         
-        // Optimize: only process around eye regions
         const step = 1;
         for (let y = 0; y < height; y += step) {
             for (let x = 0; x < width; x += step) {
                 const dist = this.distanceToPolygon(x, y, eyePoints);
-                if (dist < 30) { // Only process nearby pixels
+                if (dist < 30) {
                     mask[y * width + x] = Math.max(0, 1 - dist / 25);
                 }
             }
@@ -382,12 +688,11 @@ class UVFaceFilter {
         
         if (lipPoints.length === 0) return mask;
         
-        // Optimize: only process around lip region
         const step = 1;
         for (let y = 0; y < height; y += step) {
             for (let x = 0; x < width; x += step) {
                 const dist = this.distanceToPolygon(x, y, lipPoints);
-                if (dist < 25) { // Only process nearby pixels
+                if (dist < 25) {
                     mask[y * width + x] = Math.max(0, 1 - dist / 20);
                 }
             }
@@ -412,12 +717,11 @@ class UVFaceFilter {
         
         if (eyebrowPoints.length === 0) return mask;
         
-        // Optimize: only process around eyebrow region
         const step = 1;
         for (let y = 0; y < height; y += step) {
             for (let x = 0; x < width; x += step) {
                 const dist = this.distanceToPolygon(x, y, eyebrowPoints);
-                if (dist < 20) { // Only process nearby pixels
+                if (dist < 20) {
                     mask[y * width + x] = Math.max(0, 1 - dist / 15);
                 }
             }
@@ -429,7 +733,6 @@ class UVFaceFilter {
     distanceToPolygon(x, y, points) {
         if (points.length === 0) return Infinity;
         
-        // Check if point is inside polygon
         let inside = false;
         for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
             const xi = points[i].x, yi = points[i].y;
@@ -442,7 +745,6 @@ class UVFaceFilter {
         
         if (inside) return 0;
         
-        // Find minimum distance to polygon edges
         let minDist = Infinity;
         for (let i = 0; i < points.length; i++) {
             const p1 = points[i];
@@ -493,17 +795,14 @@ class UVFaceFilter {
     }
     
     applyUVLUT(r, g, b, type) {
-        // High-contrast color LUT based on type - matching TikTok UV filter
         switch (type) {
             case 'skin':
-                // Deep blue / cyan for skin (UV effect)
                 return {
                     r: Math.min(255, Math.max(0, b * 0.4 + r * 0.05)),
                     g: Math.min(255, Math.max(0, b * 0.7 + g * 0.15)),
                     b: Math.min(255, Math.max(0, b * 0.95 + r * 0.05))
                 };
             case 'eye':
-                // Near white for eyes
                 const eyeBrightness = (r + g + b) / 3;
                 return {
                     r: Math.min(255, eyeBrightness * 1.3),
@@ -511,14 +810,12 @@ class UVFaceFilter {
                     b: Math.min(255, eyeBrightness * 1.3)
                 };
             case 'lip':
-                // Greenish tone for lips
                 return {
                     r: Math.min(255, Math.max(0, g * 0.5 + r * 0.2)),
                     g: Math.min(255, Math.max(0, g * 0.9 + b * 0.2)),
                     b: Math.min(255, Math.max(0, g * 0.4 + b * 0.3))
                 };
             case 'hair':
-                // White / light for hair/background
                 const hairBrightness = (r + g + b) / 3;
                 return {
                     r: Math.min(255, hairBrightness * 1.15),
@@ -542,21 +839,18 @@ class UVFaceFilter {
     }
     
     applySoftBlur(imageData, mask, radius) {
-        // Apply very soft edge blur only at mask boundaries
         const data = imageData.data;
         const width = imageData.width;
         const height = imageData.height;
         const tempData = new Uint8ClampedArray(data);
         
-        // Only process edge regions for performance
-        const step = 2; // Process every other pixel
+        const step = 2;
         
         for (let y = radius; y < height - radius; y += step) {
             for (let x = radius; x < width - radius; x += step) {
                 const idx = y * width + x;
                 const maskVal = mask[idx];
                 
-                // Only blur at edges (where mask transitions)
                 if (maskVal > 0.15 && maskVal < 0.85) {
                     let rSum = 0, gSum = 0, bSum = 0, count = 0;
                     
@@ -605,8 +899,14 @@ class UVFaceFilter {
 
 // Initialize filter - wait for MediaPipe to load, then start
 window.addEventListener('load', () => {
+    console.log('[UVFilter] Window load event fired');
+    console.log('[UVFilter] typeof FaceMesh:', typeof FaceMesh);
+    console.log('[UVFilter] typeof Camera:', typeof Camera);
+    
     // Give MediaPipe scripts time to initialize
     setTimeout(() => {
+        console.log('[UVFilter] Initializing UVFaceFilter after timeout');
+        console.log('[UVFilter] typeof FaceMesh after timeout:', typeof FaceMesh);
         new UVFaceFilter();
     }, 100);
 });
