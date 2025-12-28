@@ -576,24 +576,21 @@ class UVFaceFilter {
             devicePixelRatio
         });
         
-        // Calculate display size
-        let displayWidth, displayHeight;
-        if (videoAspect > windowAspect) {
-            displayWidth = windowWidth;
-            displayHeight = windowWidth / videoAspect;
-        } else {
-            displayWidth = windowHeight * videoAspect;
-            displayHeight = windowHeight;
-        }
+        // Use full viewport dimensions to avoid black boxes
+        const displayWidth = windowWidth;
+        const displayHeight = windowHeight;
         
         // Set canvas internal resolution to match device pixel ratio for crisp rendering
         this.canvas.width = displayWidth * devicePixelRatio;
         this.canvas.height = displayHeight * devicePixelRatio;
         
-        // Set canvas display size (CSS)
-        this.canvas.style.width = displayWidth + 'px';
-        this.canvas.style.height = displayHeight + 'px';
+        // Keep CSS at 100vw/100vh to fill entire viewport (no black boxes)
+        this.canvas.style.width = '100vw';
+        this.canvas.style.height = '100vh';
         this.canvas.style.objectFit = 'cover';
+        this.canvas.style.position = 'fixed';
+        this.canvas.style.top = '0';
+        this.canvas.style.left = '0';
         
         // Scale context to match device pixel ratio
         this.ctx.scale(devicePixelRatio, devicePixelRatio);
