@@ -939,7 +939,8 @@ class UVFaceFilter {
                 }
             }
             
-            // No contrast adjustment - pure inversion only
+            // Apply noise reduction for smoother image
+            this.applyNoiseReduction(imageData);
             
             // Put processed image back
             this.ctx.putImageData(imageData, 0, 0);
@@ -1573,6 +1574,39 @@ class UVFaceFilter {
             data[i] = this.clamp(factor * (data[i] - 128) + 128);
             data[i + 1] = this.clamp(factor * (data[i + 1] - 128) + 128);
             data[i + 2] = this.clamp(factor * (data[i + 2] - 128) + 128);
+        }
+    }
+    
+    applyNoiseReduction(imageData) {
+        // Simple noise reduction using a small blur kernel
+        const data = imageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+        const tempData = new Uint8ClampedArray(data);
+        
+        // Apply a 3x3 Gaussian-like blur for noise reduction
+        const radius = 1;
+        for (let y = radius; y < height - radius; y++) {
+            for (let x = radius; x < width - radius; x++) {
+                let rSum = 0, gSum = 0, bSum = 0, count = 0;
+                
+                for (let dy = -radius; dy <= radius; dy++) {
+                    for (let dx = -radius; dx <= radius; dx++) {
+                        const idx = ((y + dy) * width + (x + dx)) * 4;
+                        const weight = (dx === 0 && dy === 0) ? 4 : 1; // Center pixel has more weight
+                        rSum += tempData[idx] * weight;
+                        gSum += tempData[idx + 1] * weight;
+                        bSum += tempData[idx + 2] * weight;
+                        count += weight;
+                    }
+                }
+                
+                const idx = (y * width + x) * 4;
+                // Blend 70% smoothed, 30% original for subtle noise reduction
+                data[idx] = data[idx] * 0.3 + (rSum / count) * 0.7;
+                data[idx + 1] = data[idx + 1] * 0.3 + (gSum / count) * 0.7;
+                data[idx + 2] = data[idx + 2] * 0.3 + (bSum / count) * 0.7;
+            }
         }
     }
     
