@@ -1,6 +1,9 @@
 // UV Face Filter - TikTok Style
 // DEEP DEBUG MODE: Extensive logging at every step
 
+console.log('=== MAIN.JS STARTING ===');
+console.log('Timestamp:', new Date().toISOString());
+
 // Global flag to prevent multiple getUserMedia calls
 window.cameraInitialized = false;
 window.uvFilterInstance = null;
@@ -18,8 +21,17 @@ function deepLog(category, message, data = null) {
     if (window.debugLogs.length > 1000) {
         window.debugLogs.shift(); // Keep last 1000 logs
     }
-    console.log(`[${timestamp}] [${category}] ${message}`, data || '');
+    // Always log to console
+    const logMsg = `[${timestamp}] [${category}] ${message}`;
+    if (data) {
+        console.log(logMsg, data);
+    } else {
+        console.log(logMsg);
+    }
 }
+
+console.log('=== deepLog function defined ===');
+deepLog('INIT', 'main.js script loaded');
 
 class UVFaceFilter {
     constructor() {
@@ -1346,11 +1358,24 @@ class UVFaceFilter {
 }
 
 // Initialize filter
+console.log('=== SETTING UP WINDOW LOAD LISTENER ===');
+
 window.addEventListener('load', () => {
+    console.log('=== WINDOW LOAD EVENT FIRED ===');
     deepLog('INIT', 'Window load event fired');
+    
+    console.log('MediaPipe check:', {
+        FaceMesh: typeof FaceMesh,
+        Camera: typeof Camera
+    });
     deepLog('INIT', 'MediaPipe availability', {
         FaceMesh: typeof FaceMesh,
         Camera: typeof Camera
+    });
+    
+    console.log('Global state:', {
+        cameraInitialized: window.cameraInitialized,
+        uvFilterInstance: !!window.uvFilterInstance
     });
     deepLog('INIT', 'Global state', {
         cameraInitialized: window.cameraInitialized,
@@ -1358,19 +1383,44 @@ window.addEventListener('load', () => {
     });
     
     if (window.uvFilterInstance) {
+        console.warn('WARNING: Instance already exists, skipping initialization');
         deepLog('INIT', 'WARNING: Instance already exists, skipping initialization');
         return;
     }
     
+    console.log('Waiting 100ms before initializing...');
     setTimeout(() => {
+        console.log('=== INITIALIZING UVFaceFilter ===');
         deepLog('INIT', 'Initializing UVFaceFilter after timeout');
         deepLog('INIT', 'MediaPipe after timeout', {
             FaceMesh: typeof FaceMesh,
             Camera: typeof Camera
         });
-        new UVFaceFilter();
+        try {
+            new UVFaceFilter();
+            console.log('✓ UVFaceFilter instance created');
+        } catch (error) {
+            console.error('ERROR creating UVFaceFilter:', error);
+            console.error('Error stack:', error.stack);
+        }
     }, 100);
 });
+
+// Also try immediate initialization if DOM is already ready
+if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    console.log('DOM already ready, initializing immediately');
+    setTimeout(() => {
+        if (!window.uvFilterInstance) {
+            console.log('=== INITIALIZING UVFaceFilter (DOM ready) ===');
+            try {
+                new UVFaceFilter();
+                console.log('✓ UVFaceFilter instance created (DOM ready)');
+            } catch (error) {
+                console.error('ERROR creating UVFaceFilter (DOM ready):', error);
+            }
+        }
+    }, 100);
+}
 
 // Expose debug logs globally
 window.getDebugLogs = () => {

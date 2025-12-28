@@ -35,16 +35,35 @@
             background: #000;
         }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+    <script>
+        console.log('=== UV FILTER PAGE LOADING ===');
+        console.log('Timestamp:', new Date().toISOString());
+        console.log('User Agent:', navigator.userAgent);
+        console.log('MediaDevices available:', !!navigator.mediaDevices);
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous" onerror="console.error('ERROR: camera_utils.js failed to load')" onload="console.log('✓ camera_utils.js loaded')"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous" onerror="console.error('ERROR: control_utils.js failed to load')" onload="console.log('✓ control_utils.js loaded')"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous" onerror="console.error('ERROR: drawing_utils.js failed to load')" onload="console.log('✓ drawing_utils.js loaded')"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous" onerror="console.error('ERROR: face_mesh.js failed to load')" onload="console.log('✓ face_mesh.js loaded')"></script>
+    <script>
+        window.addEventListener('load', () => {
+            console.log('=== PAGE LOADED ===');
+            console.log('FaceMesh available:', typeof FaceMesh !== 'undefined');
+            console.log('Camera available:', typeof Camera !== 'undefined');
+        });
+    </script>
 </head>
 <body>
     <video id="video" autoplay muted playsinline></video>
     <canvas id="canvas"></canvas>
     
-    <script src="./main.js"></script>
+    <script>
+        console.log('=== LOADING main.js ===');
+    </script>
+    <script src="./main.js" onerror="console.error('ERROR: main.js failed to load')" onload="console.log('✓ main.js loaded')"></script>
+    <script>
+        console.log('=== SCRIPTS LOADED ===');
+    </script>
 </body>
 </html>
 
