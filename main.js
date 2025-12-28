@@ -83,6 +83,7 @@ class UVFaceFilter {
         this.lastHealthCheck = 0;
         this.renderLoopActive = false;
         this.lastLandmarks = null; // Store last detected landmarks for continuous rendering
+        this.faceMeshSetupAttempted = false; // Prevent multiple FaceMesh setups
         
         // Face mesh landmarks
         this.skinLandmarks = this.getSkinLandmarks();
@@ -369,16 +370,22 @@ class UVFaceFilter {
                     }
                     
                     // Try FaceMesh but don't wait for it - fallback is already running
-                    console.log('Setting up FaceMesh in 500ms...');
-                    setTimeout(() => {
-                        console.log('FaceMesh setup timeout fired, fallbackActive:', this.fallbackActive);
-                        if (!this.fallbackActive || true) { // Always try to setup FaceMesh
-                            console.log('Calling setupFaceMesh()...');
-                            this.setupFaceMesh();
-                        } else {
-                            console.log('Skipping FaceMesh setup - fallback is active');
-                        }
-                    }, 500);
+                    // Only setup once
+                    if (!this.faceMeshSetupAttempted) {
+                        console.log('Setting up FaceMesh in 500ms...');
+                        this.faceMeshSetupAttempted = true;
+                        setTimeout(() => {
+                            console.log('FaceMesh setup timeout fired');
+                            if (!this.faceMesh) { // Only setup if not already created
+                                console.log('Calling setupFaceMesh()...');
+                                this.setupFaceMesh();
+                            } else {
+                                console.log('FaceMesh already exists, skipping setup');
+                            }
+                        }, 500);
+                    } else {
+                        console.log('FaceMesh setup already attempted, skipping');
+                    }
                 } else {
                     deepLog('VIDEO_EVENT', 'ERROR: Video dimensions are zero');
                     this.activateHardFallback('Video dimensions are zero', false);
@@ -484,6 +491,14 @@ class UVFaceFilter {
     
     setupFaceMesh() {
         console.log('=== setupFaceMesh() CALLED ===');
+        
+        // CRITICAL: Prevent multiple FaceMesh instances
+        if (this.faceMesh) {
+            console.log('FaceMesh already exists, skipping setup');
+            deepLog('FACEMESH', 'FaceMesh already exists, skipping');
+            return;
+        }
+        
         deepLog('FACEMESH', 'setupFaceMesh() called');
         deepLog('FACEMESH', 'MediaPipe availability', {
             FaceMesh: typeof FaceMesh,
@@ -494,9 +509,6 @@ class UVFaceFilter {
         console.log('Camera type:', typeof Camera);
         console.log('Fallback active:', this.fallbackActive);
         console.log('Render loop active:', this.renderLoopActive);
-        
-        // Always try to setup FaceMesh - don't skip even if fallback is active
-        // FaceMesh can work alongside fallback
         
         if (typeof FaceMesh === 'undefined') {
             console.error('ERROR: FaceMesh not available');
@@ -904,8 +916,11 @@ class UVFaceFilter {
     processFrame(results) {
         try {
             if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-                // No face - switch back to fallback if not already active
-                if (!this.fallbackActive) {
+                // No face - keep using last landmarks if available, otherwise switch to fallback
+                if (this.lastLandmarks) {
+                    // Keep rendering with last known landmarks
+                    return;
+                } else if (!this.fallbackActive) {
                     this.fallbackActive = true;
                     this.startImmediateFallback();
                 }
@@ -921,14 +936,6 @@ class UVFaceFilter {
             // Disable fallback to apply UV filter
             this.fallbackActive = false;
             
-            // Cancel fallback render loop if active
-            if (this.animationFrame && this.renderLoopActive) {
-                cancelAnimationFrame(this.animationFrame);
-                this.animationFrame = null;
-                this.renderLoopActive = false;
-                deepLog('PROCESS', 'Cancelled fallback render loop to apply UV filter');
-            }
-            
             const landmarks = results.multiFaceLandmarks[0];
             
             // Store landmarks for continuous rendering
@@ -938,16 +945,28 @@ class UVFaceFilter {
             this.applyUVFilter(landmarks);
             
             // Start continuous UV filter render loop if not already running
-            if (!this.animationFrame || !this.renderLoopActive) {
+            if (!this.renderLoopActive) {
                 this.renderLoopActive = true;
+                // Cancel any existing animation frame first
+                if (this.animationFrame) {
+                    cancelAnimationFrame(this.animationFrame);
+                }
+                
                 const drawUVFrame = () => {
                     if (this.fallbackActive) {
+                        this.renderLoopActive = false;
                         return; // Stop if fallback reactivated
                     }
                     
                     // Re-apply UV filter with last known landmarks
                     if (this.lastLandmarks && this.video && this.video.readyState >= this.video.HAVE_CURRENT_DATA) {
                         this.applyUVFilter(this.lastLandmarks);
+                    } else if (!this.lastLandmarks) {
+                        // No landmarks - switch to fallback
+                        this.fallbackActive = true;
+                        this.renderLoopActive = false;
+                        this.startImmediateFallback();
+                        return;
                     }
                     
                     this.animationFrame = requestAnimationFrame(drawUVFrame);
