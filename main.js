@@ -884,7 +884,7 @@ class UVFaceFilter {
             const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
             const data = imageData.data;
             
-            // Apply UV filter to every pixel - simple color inversion
+            // Apply UV filter with enhanced blue for people and darker background
             for (let i = 0; i < data.length; i += 4) {
                 const r = data[i];
                 const g = data[i + 1];
@@ -907,11 +907,36 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Pure color inversion - classic UV camera effect
-                // No additional processing, just invert RGB values
-                data[i] = 255 - r;     // Invert red
-                data[i + 1] = 255 - g; // Invert green
-                data[i + 2] = 255 - b; // Invert blue
+                // Invert colors first
+                let invertedR = 255 - r;
+                let invertedG = 255 - g;
+                let invertedB = 255 - b;
+                
+                // Detect if this is likely skin/person (medium brightness, some color)
+                // Skin tones after inversion are typically in the blue/cyan range
+                const invertedBrightness = (invertedR + invertedG + invertedB) / 3;
+                const isLikelySkin = invertedBrightness > 100 && invertedBrightness < 200 && saturation > 0.2;
+                
+                // Detect if this is likely background (very dark or very bright after inversion)
+                const isBackground = invertedBrightness < 50 || (invertedBrightness > 220 && saturation < 0.15);
+                
+                if (isLikelySkin) {
+                    // Enhance blue/cyan for people - make it more intense
+                    data[i] = Math.min(255, invertedR * 0.3);           // Reduce red
+                    data[i + 1] = Math.min(255, invertedG * 0.7);       // Keep some green
+                    data[i + 2] = Math.min(255, invertedB * 1.3);       // Boost blue significantly
+                } else if (isBackground) {
+                    // Make background darker/less visible
+                    const darkenFactor = invertedBrightness < 50 ? 0.3 : 0.5;
+                    data[i] = invertedR * darkenFactor;
+                    data[i + 1] = invertedG * darkenFactor;
+                    data[i + 2] = invertedB * darkenFactor;
+                } else {
+                    // Standard inversion for other areas
+                    data[i] = invertedR;
+                    data[i + 1] = invertedG;
+                    data[i + 2] = invertedB;
+                }
             }
             
             // No contrast adjustment - pure inversion only
