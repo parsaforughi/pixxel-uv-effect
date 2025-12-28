@@ -82,6 +82,7 @@ class UVFaceFilter {
         this.cameraStream = null;
         this.lastHealthCheck = 0;
         this.renderLoopActive = false;
+        this.lastLandmarks = null; // Store last detected landmarks for continuous rendering
         
         // Face mesh landmarks
         this.skinLandmarks = this.getSkinLandmarks();
@@ -902,15 +903,12 @@ class UVFaceFilter {
     
     processFrame(results) {
         try {
-            deepLog('PROCESS', 'processFrame() called', {
-                hasResults: !!results,
-                hasLandmarks: !!(results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0),
-                landmarksCount: results.multiFaceLandmarks?.length || 0,
-                fallbackActive: this.fallbackActive
-            });
-            
             if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-                deepLog('PROCESS', 'No face landmarks - skipping filter');
+                // No face - switch back to fallback if not already active
+                if (!this.fallbackActive) {
+                    this.fallbackActive = true;
+                    this.startImmediateFallback();
+                }
                 return;
             }
             
@@ -918,38 +916,44 @@ class UVFaceFilter {
             if (this.faceMeshLoadTimeout) {
                 clearTimeout(this.faceMeshLoadTimeout);
                 this.faceMeshLoadTimeout = null;
-                deepLog('PROCESS', 'FaceMesh timeout cleared - face detected');
             }
             
             // Disable fallback to apply UV filter
             this.fallbackActive = false;
-            this.renderLoopActive = false;
             
-            // Cancel fallback render loop
-            if (this.animationFrame) {
+            // Cancel fallback render loop if active
+            if (this.animationFrame && this.renderLoopActive) {
                 cancelAnimationFrame(this.animationFrame);
                 this.animationFrame = null;
+                this.renderLoopActive = false;
                 deepLog('PROCESS', 'Cancelled fallback render loop to apply UV filter');
             }
             
             const landmarks = results.multiFaceLandmarks[0];
-            deepLog('PROCESS', 'Processing face landmarks', {
-                landmarksCount: landmarks.length
-            });
             
-            // Apply UV filter directly
+            // Store landmarks for continuous rendering
+            this.lastLandmarks = landmarks;
+            
+            // Apply UV filter immediately
             this.applyUVFilter(landmarks);
             
-            // Restart render loop for UV filter
-            if (!this.animationFrame) {
+            // Start continuous UV filter render loop if not already running
+            if (!this.animationFrame || !this.renderLoopActive) {
+                this.renderLoopActive = true;
                 const drawUVFrame = () => {
                     if (this.fallbackActive) {
                         return; // Stop if fallback reactivated
                     }
-                    // UV filter will be applied on next FaceMesh result
+                    
+                    // Re-apply UV filter with last known landmarks
+                    if (this.lastLandmarks && this.video && this.video.readyState >= this.video.HAVE_CURRENT_DATA) {
+                        this.applyUVFilter(this.lastLandmarks);
+                    }
+                    
                     this.animationFrame = requestAnimationFrame(drawUVFrame);
                 };
                 this.animationFrame = requestAnimationFrame(drawUVFrame);
+                deepLog('PROCESS', 'Started UV filter render loop');
             }
         } catch (error) {
             deepLog('PROCESS', 'ERROR in processFrame', {
