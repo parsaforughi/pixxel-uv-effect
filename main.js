@@ -867,28 +867,41 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Color inversion with minimum threshold - prevent pure black for light shadows
-                // Light shadows should appear as dark blue/purple, not pure black
+                // Color inversion - prevent pure black for bright backgrounds (walls, roof)
+                // Bright areas should invert to dark but not pure black
                 let invertedR = 255 - r;
                 let invertedG = 255 - g;
                 let invertedB = 255 - b;
                 
-                // Calculate inverted brightness
+                // Calculate original brightness to detect bright backgrounds
+                const originalBrightness = (r + g + b) / 3;
                 const invertedBrightness = (invertedR + invertedG + invertedB) / 3;
                 
-                // If inverted brightness is very low (was very bright original), 
-                // add minimum threshold to prevent pure black and add UV-like blue tint
-                if (invertedBrightness < 30) {
-                    // Very bright areas (shadows in UV) - minimum threshold with blue tint
-                    const minValue = 15; // Minimum to prevent pure black
-                    invertedR = Math.max(minValue, invertedR * 0.3); // Reduce red
-                    invertedG = Math.max(minValue, invertedG * 0.5); // Reduce green
-                    invertedB = Math.max(minValue, invertedB * 0.8); // Keep more blue
+                // If original was very bright (walls, roof, background), 
+                // prevent pure black and keep some color information
+                if (originalBrightness > 200) {
+                    // Very bright areas (white walls, roof) - invert but keep minimum values
+                    const minValue = 40; // Higher minimum for bright backgrounds
+                    invertedR = Math.max(minValue, invertedR);
+                    invertedG = Math.max(minValue, invertedG);
+                    invertedB = Math.max(minValue, invertedB);
+                } else if (originalBrightness > 150) {
+                    // Moderately bright areas - prevent pure black
+                    const minValue = 25;
+                    invertedR = Math.max(minValue, invertedR);
+                    invertedG = Math.max(minValue, invertedG);
+                    invertedB = Math.max(minValue, invertedB);
+                } else if (invertedBrightness < 30) {
+                    // Very dark after inversion (was very bright) - add minimum with blue tint
+                    const minValue = 20;
+                    invertedR = Math.max(minValue, invertedR * 0.4);
+                    invertedG = Math.max(minValue, invertedG * 0.6);
+                    invertedB = Math.max(minValue, invertedB * 0.8);
                 } else if (invertedBrightness < 60) {
-                    // Light shadows - add slight blue tint, prevent pure black
-                    const minValue = 10;
-                    invertedR = Math.max(minValue, invertedR * 0.6);
-                    invertedG = Math.max(minValue, invertedG * 0.7);
+                    // Light shadows - prevent pure black
+                    const minValue = 15;
+                    invertedR = Math.max(minValue, invertedR * 0.7);
+                    invertedG = Math.max(minValue, invertedG * 0.8);
                     invertedB = Math.max(minValue, invertedB * 0.9);
                 }
                 
