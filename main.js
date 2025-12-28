@@ -867,61 +867,57 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Color inversion with reduced contrast between light and shadow
-                // Compress the dynamic range to reduce contrast
+                // Color inversion with reduced contrast - prevent pure black for ALL pixels
+                // Use softer inversion to reduce contrast
                 let invertedR = 255 - r;
                 let invertedG = 255 - g;
                 let invertedB = 255 - b;
                 
-                // Calculate original brightness to detect light and shadow
-                const originalBrightness = (r + g + b) / 3;
-                const invertedBrightness = (invertedR + invertedG + invertedB) / 3;
-                
-                // Compress dynamic range - bring light and shadow closer together
-                // Map inverted brightness to a narrower range to reduce contrast
-                const compressedBrightness = invertedBrightness * 0.6 + 50; // Compress and shift up
-                
-                // Calculate scale factor to compress the range
-                const scale = compressedBrightness / Math.max(invertedBrightness, 1);
-                
-                // Apply compression to reduce contrast between light and shadow
-                invertedR = invertedR * scale;
-                invertedG = invertedG * scale;
-                invertedB = invertedB * scale;
-                
-                // Soften the inversion further (blend with original)
-                const blendFactor = 0.80; // 80% inverted, 20% original for softer look
+                // Soften the inversion to reduce contrast (blend with original)
+                const blendFactor = 0.85; // 85% inverted, 15% original for softer look
                 invertedR = invertedR * blendFactor + r * (1 - blendFactor);
                 invertedG = invertedG * blendFactor + g * (1 - blendFactor);
                 invertedB = invertedB * blendFactor + b * (1 - blendFactor);
                 
-                // Clamp values and ensure minimum thresholds for visibility
+                // Calculate original brightness to detect bright backgrounds
+                const originalBrightness = (r + g + b) / 3;
+                const invertedBrightness = (invertedR + invertedG + invertedB) / 3;
+                
+                // GLOBAL MINIMUM: Ensure NO pixel becomes pure black (0,0,0)
+                // This applies to ALL pixels including background
+                const globalMinValue = 20; // Minimum value for all pixels to prevent pure black
+                
+                // If original was very bright (walls, roof, background), 
+                // prevent pure black and keep some color information
                 if (originalBrightness > 200) {
-                    // Very bright areas (white walls, roof) - keep visible but not too dark
-                    const minValue = 60; // Higher minimum to reduce contrast
-                    const maxValue = 180; // Cap maximum to reduce contrast
-                    invertedR = Math.min(maxValue, Math.max(minValue, invertedR));
-                    invertedG = Math.min(maxValue, Math.max(minValue, invertedG));
-                    invertedB = Math.min(maxValue, Math.max(minValue, invertedB));
+                    // Very bright areas (white walls, roof) - invert but keep minimum values
+                    const minValue = Math.max(globalMinValue, 40); // Higher minimum for bright backgrounds
+                    invertedR = Math.max(minValue, invertedR);
+                    invertedG = Math.max(minValue, invertedG);
+                    invertedB = Math.max(minValue, invertedB);
                 } else if (originalBrightness > 150) {
-                    // Moderately bright areas - reduce contrast
-                    const minValue = 45;
-                    const maxValue = 200;
-                    invertedR = Math.min(maxValue, Math.max(minValue, invertedR));
-                    invertedG = Math.min(maxValue, Math.max(minValue, invertedG));
-                    invertedB = Math.min(maxValue, Math.max(minValue, invertedB));
+                    // Moderately bright areas - prevent pure black
+                    const minValue = Math.max(globalMinValue, 25);
+                    invertedR = Math.max(minValue, invertedR);
+                    invertedG = Math.max(minValue, invertedG);
+                    invertedB = Math.max(minValue, invertedB);
                 } else if (invertedBrightness < 30) {
-                    // Very dark after inversion - raise minimum to reduce contrast
-                    const minValue = 40; // Higher minimum
-                    invertedR = Math.max(minValue, invertedR);
-                    invertedG = Math.max(minValue, invertedG);
-                    invertedB = Math.max(minValue, invertedB);
-                } else if (invertedBrightness < 80) {
-                    // Light shadows - raise minimum to reduce contrast with bright areas
-                    const minValue = 35;
-                    invertedR = Math.max(minValue, invertedR);
-                    invertedG = Math.max(minValue, invertedG);
-                    invertedB = Math.max(minValue, invertedB);
+                    // Very dark after inversion (was very bright) - add minimum with blue tint
+                    const minValue = Math.max(globalMinValue, 20);
+                    invertedR = Math.max(minValue, invertedR * 0.4);
+                    invertedG = Math.max(minValue, invertedG * 0.6);
+                    invertedB = Math.max(minValue, invertedB * 0.8);
+                } else if (invertedBrightness < 60) {
+                    // Light shadows - prevent pure black
+                    const minValue = Math.max(globalMinValue, 15);
+                    invertedR = Math.max(minValue, invertedR * 0.7);
+                    invertedG = Math.max(minValue, invertedG * 0.8);
+                    invertedB = Math.max(minValue, invertedB * 0.9);
+                } else {
+                    // All other pixels - apply global minimum to prevent pure black
+                    invertedR = Math.max(globalMinValue, invertedR);
+                    invertedG = Math.max(globalMinValue, invertedG);
+                    invertedB = Math.max(globalMinValue, invertedB);
                 }
                 
                 data[i] = invertedR;
