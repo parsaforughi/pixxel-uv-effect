@@ -867,11 +867,34 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Pure color inversion - classic UV camera effect
-                // No additional processing, just invert RGB values
-                data[i] = 255 - r;     // Invert red
-                data[i + 1] = 255 - g; // Invert green
-                data[i + 2] = 255 - b; // Invert blue
+                // Color inversion with minimum threshold - prevent pure black for light shadows
+                // Light shadows should appear as dark blue/purple, not pure black
+                let invertedR = 255 - r;
+                let invertedG = 255 - g;
+                let invertedB = 255 - b;
+                
+                // Calculate inverted brightness
+                const invertedBrightness = (invertedR + invertedG + invertedB) / 3;
+                
+                // If inverted brightness is very low (was very bright original), 
+                // add minimum threshold to prevent pure black and add UV-like blue tint
+                if (invertedBrightness < 30) {
+                    // Very bright areas (shadows in UV) - minimum threshold with blue tint
+                    const minValue = 15; // Minimum to prevent pure black
+                    invertedR = Math.max(minValue, invertedR * 0.3); // Reduce red
+                    invertedG = Math.max(minValue, invertedG * 0.5); // Reduce green
+                    invertedB = Math.max(minValue, invertedB * 0.8); // Keep more blue
+                } else if (invertedBrightness < 60) {
+                    // Light shadows - add slight blue tint, prevent pure black
+                    const minValue = 10;
+                    invertedR = Math.max(minValue, invertedR * 0.6);
+                    invertedG = Math.max(minValue, invertedG * 0.7);
+                    invertedB = Math.max(minValue, invertedB * 0.9);
+                }
+                
+                data[i] = invertedR;
+                data[i + 1] = invertedG;
+                data[i + 2] = invertedB;
             }
             
             // No contrast adjustment - pure inversion only
