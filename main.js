@@ -569,18 +569,13 @@ class UVFaceFilter {
         }
         
         // Set canvas internal resolution higher for better quality
-        // Use full viewport dimensions to fill entire screen
-        this.canvas.width = windowWidth * dpr;
-        this.canvas.height = windowHeight * dpr;
+        this.canvas.width = displayWidth * dpr;
+        this.canvas.height = displayHeight * dpr;
         
-        // Keep CSS at 100vw/100vh to fill entire viewport (no black areas)
-        // Don't override CSS - let it fill the screen
-        this.canvas.style.width = '100vw';
-        this.canvas.style.height = '100vh';
+        // CSS size stays at display size
+        this.canvas.style.width = displayWidth + 'px';
+        this.canvas.style.height = displayHeight + 'px';
         this.canvas.style.objectFit = 'cover';
-        this.canvas.style.position = 'fixed';
-        this.canvas.style.top = '0';
-        this.canvas.style.left = '0';
         
         // Scale context to match device pixel ratio
         this.ctx.scale(dpr, dpr);
@@ -846,7 +841,8 @@ class UVFaceFilter {
             const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
             const data = imageData.data;
             
-            // Apply light smoothing for softer image (before inversion)
+            // Apply stronger noise reduction for human areas and light smoothing overall
+            this.applyNoiseReduction(imageData);
             this.applyLightSmoothing(imageData);
             
             // Apply UV filter to every pixel - simple color inversion
@@ -872,7 +868,7 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Color inversion with reduced contrast - prevent pure black for ALL pixels
+                // Color inversion with reduced contrast - prevent pure black for bright backgrounds
                 // Use softer inversion to reduce contrast
                 let invertedR = 255 - r;
                 let invertedG = 255 - g;
@@ -888,9 +884,8 @@ class UVFaceFilter {
                 const originalBrightness = (r + g + b) / 3;
                 const invertedBrightness = (invertedR + invertedG + invertedB) / 3;
                 
-                // GLOBAL MINIMUM: Ensure NO pixel becomes pure black (0,0,0)
-                // This applies to ALL pixels including background
-                const globalMinValue = 20; // Minimum value for all pixels to prevent pure black
+                // GLOBAL MINIMUM: Ensure NO pixel becomes pure black (0,0,0) - especially background
+                const globalMinValue = 25; // Minimum for all pixels to prevent pure black
                 
                 // If original was very bright (walls, roof, background), 
                 // prevent pure black and keep some color information
@@ -902,24 +897,24 @@ class UVFaceFilter {
                     invertedB = Math.max(minValue, invertedB);
                 } else if (originalBrightness > 150) {
                     // Moderately bright areas - prevent pure black
-                    const minValue = Math.max(globalMinValue, 25);
+                    const minValue = Math.max(globalMinValue, 30);
                     invertedR = Math.max(minValue, invertedR);
                     invertedG = Math.max(minValue, invertedG);
                     invertedB = Math.max(minValue, invertedB);
                 } else if (invertedBrightness < 30) {
                     // Very dark after inversion (was very bright) - add minimum with blue tint
-                    const minValue = Math.max(globalMinValue, 20);
+                    const minValue = Math.max(globalMinValue, 25);
                     invertedR = Math.max(minValue, invertedR * 0.4);
                     invertedG = Math.max(minValue, invertedG * 0.6);
                     invertedB = Math.max(minValue, invertedB * 0.8);
                 } else if (invertedBrightness < 60) {
                     // Light shadows - prevent pure black
-                    const minValue = Math.max(globalMinValue, 15);
+                    const minValue = Math.max(globalMinValue, 20);
                     invertedR = Math.max(minValue, invertedR * 0.7);
                     invertedG = Math.max(minValue, invertedG * 0.8);
                     invertedB = Math.max(minValue, invertedB * 0.9);
                 } else {
-                    // All other pixels - apply global minimum to prevent pure black
+                    // All other pixels (including background) - apply global minimum
                     invertedR = Math.max(globalMinValue, invertedR);
                     invertedG = Math.max(globalMinValue, invertedG);
                     invertedB = Math.max(globalMinValue, invertedB);
@@ -1604,6 +1599,53 @@ class UVFaceFilter {
                         data[idx * 4 + 2] = this.lerp(data[idx * 4 + 2], bSum / count, blend * 0.25);
                     }
                 }
+            }
+        }
+    }
+    
+    applyNoiseReduction(imageData) {
+        // Strong noise reduction specifically for human/face areas (center of frame)
+        const data = imageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+        const tempData = new Uint8ClampedArray(data);
+        
+        // Center area where humans typically are (middle 60% of frame)
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const humanAreaRadius = Math.min(width, height) * 0.3;
+        
+        const radius = 1;
+        for (let y = radius; y < height - radius; y++) {
+            for (let x = radius; x < width - radius; x++) {
+                // Calculate distance from center
+                const dx = x - centerX;
+                const dy = y - centerY;
+                const distFromCenter = Math.sqrt(dx * dx + dy * dy);
+                
+                // Apply stronger noise reduction in center area (where humans are)
+                const isHumanArea = distFromCenter < humanAreaRadius;
+                if (!isHumanArea) continue; // Skip background areas
+                
+                let rSum = 0, gSum = 0, bSum = 0, count = 0;
+                
+                // 3x3 Gaussian-like kernel for noise reduction
+                for (let dy = -radius; dy <= radius; dy++) {
+                    for (let dx = -radius; dx <= radius; dx++) {
+                        const idx = ((y + dy) * width + (x + dx)) * 4;
+                        const weight = (dx === 0 && dy === 0) ? 4 : 1;
+                        rSum += tempData[idx] * weight;
+                        gSum += tempData[idx + 1] * weight;
+                        bSum += tempData[idx + 2] * weight;
+                        count += weight;
+                    }
+                }
+                
+                // Stronger blend for human areas (80% smoothed, 20% original)
+                const idx = (y * width + x) * 4;
+                data[idx] = data[idx] * 0.2 + (rSum / count) * 0.8;
+                data[idx + 1] = data[idx + 1] * 0.2 + (gSum / count) * 0.8;
+                data[idx + 2] = data[idx + 2] * 0.2 + (bSum / count) * 0.8;
             }
         }
     }
