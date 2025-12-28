@@ -508,16 +508,26 @@ class UVFaceFilter {
             deepLog('FACEMESH', 'FaceMesh options set');
             
             this.faceMesh.onResults((results) => {
-                if (this.fallbackActive) {
-                    deepLog('FACEMESH', 'Results received but fallback active, ignoring');
-                    return;
-                }
                 deepLog('FACEMESH', 'FaceMesh results received', {
                     hasResults: !!results,
                     hasImage: !!results.image,
-                    multiFaceLandmarks: results.multiFaceLandmarks?.length || 0
+                    multiFaceLandmarks: results.multiFaceLandmarks?.length || 0,
+                    fallbackActive: this.fallbackActive,
+                    renderLoopActive: this.renderLoopActive
                 });
-                this.processFrame(results);
+                
+                // If we have face landmarks, disable fallback temporarily to apply filter
+                if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                    deepLog('FACEMESH', 'Face detected! Applying UV filter');
+                    // Temporarily disable fallback to render UV filter
+                    const wasFallbackActive = this.fallbackActive;
+                    this.fallbackActive = false;
+                    this.processFrame(results);
+                    // Don't restore fallback - let UV filter continue
+                } else {
+                    deepLog('FACEMESH', 'No face detected in results');
+                    // Keep fallback active if no face
+                }
             });
             
             deepLog('FACEMESH', 'FaceMesh onResults handler set');
@@ -534,20 +544,19 @@ class UVFaceFilter {
                 if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
                     this.camera = new Camera(this.video, {
                         onFrame: async () => {
-                            // If fallback is active, don't process FaceMesh
-                            if (this.fallbackActive) {
-                                return;
-                            }
-                            
                             const now = performance.now();
                             if (now - this.lastFrameTime >= this.frameInterval) {
                                 this.lastFrameTime = now;
                                 if (!this.isProcessing && this.faceMesh && this.video.readyState >= this.video.HAVE_CURRENT_DATA) {
                                     this.isProcessing = true;
                                     try {
+                                        // Always try to send to FaceMesh - don't skip if fallback is active
                                         await this.faceMesh.send({ image: this.video });
                                         // Reset fail count on success
                                         this.faceMeshFailCount = 0;
+                                        deepLog('FACEMESH', 'Frame sent successfully', {
+                                            frameCount: this.frameCount
+                                        });
                                     } catch (error) {
                                         deepLog('FACEMESH', 'FaceMesh.send() ERROR', {
                                             name: error.name,
@@ -555,11 +564,11 @@ class UVFaceFilter {
                                             failCount: this.faceMeshFailCount + 1
                                         });
                                         this.faceMeshFailCount++;
-                                        // Switch to fallback after 3 failures (not 10)
-                                        if (this.faceMeshFailCount >= 3) {
-                                            deepLog('FACEMESH', 'FaceMesh failures exceeded, switching to fallback');
-                                            this.activateHardFallback('FaceMesh send failures exceeded', false);
-                                            return; // Stop processing
+                                        // Switch to fallback after 5 failures (give it more chances)
+                                        if (this.faceMeshFailCount >= 5) {
+                                            deepLog('FACEMESH', 'FaceMesh failures exceeded, staying in fallback mode');
+                                            // Don't activate hard fallback - just keep fallback active
+                                            this.fallbackActive = true;
                                         }
                                     }
                                     this.isProcessing = false;
@@ -861,19 +870,15 @@ class UVFaceFilter {
     
     processFrame(results) {
         try {
-            // If fallback is active, ignore FaceMesh results
-            if (this.fallbackActive) {
-                return;
-            }
-            
             deepLog('PROCESS', 'processFrame() called', {
                 hasResults: !!results,
                 hasLandmarks: !!(results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0),
-                landmarksCount: results.multiFaceLandmarks?.length || 0
+                landmarksCount: results.multiFaceLandmarks?.length || 0,
+                fallbackActive: this.fallbackActive
             });
             
             if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-                // Don't draw inverted frame - let fallback handle it
+                deepLog('PROCESS', 'No face landmarks - skipping filter');
                 return;
             }
             
@@ -884,25 +889,47 @@ class UVFaceFilter {
                 deepLog('PROCESS', 'FaceMesh timeout cleared - face detected');
             }
             
-            // Temporarily disable fallback to render UV filter
-            const wasFallbackActive = this.fallbackActive;
+            // Disable fallback to apply UV filter
             this.fallbackActive = false;
+            this.renderLoopActive = false;
+            
+            // Cancel fallback render loop
+            if (this.animationFrame) {
+                cancelAnimationFrame(this.animationFrame);
+                this.animationFrame = null;
+                deepLog('PROCESS', 'Cancelled fallback render loop to apply UV filter');
+            }
             
             const landmarks = results.multiFaceLandmarks[0];
             deepLog('PROCESS', 'Processing face landmarks', {
                 landmarksCount: landmarks.length
             });
+            
+            // Apply UV filter directly
             this.applyUVFilter(landmarks);
             
-            // Restore fallback state
-            this.fallbackActive = wasFallbackActive;
+            // Restart render loop for UV filter
+            if (!this.animationFrame) {
+                const drawUVFrame = () => {
+                    if (this.fallbackActive) {
+                        return; // Stop if fallback reactivated
+                    }
+                    // UV filter will be applied on next FaceMesh result
+                    this.animationFrame = requestAnimationFrame(drawUVFrame);
+                };
+                this.animationFrame = requestAnimationFrame(drawUVFrame);
+            }
         } catch (error) {
             deepLog('PROCESS', 'ERROR in processFrame', {
                 name: error.name,
                 message: error.message,
                 stack: error.stack
             });
-            // Don't draw inverted - fallback will handle it
+            // Reactivate fallback on error
+            if (!this.renderLoopActive) {
+                this.fallbackActive = true;
+                this.startImmediateFallback();
+            }
         }
     }
     
@@ -938,9 +965,23 @@ class UVFaceFilter {
     applyUVFilter(landmarks) {
         try {
             if (!this.ctx || !this.video || this.video.readyState < this.video.HAVE_CURRENT_DATA) {
-                deepLog('RENDER', 'Cannot apply UV filter - video not ready');
+                deepLog('RENDER', 'Cannot apply UV filter - video not ready', {
+                    hasCtx: !!this.ctx,
+                    hasVideo: !!this.video,
+                    readyState: this.video?.readyState
+                });
                 return;
             }
+            
+            deepLog('RENDER', 'Applying UV filter', {
+                landmarksCount: landmarks.length,
+                canvasSize: `${this.canvas.width}x${this.canvas.height}`,
+                videoSize: `${this.video.videoWidth}x${this.video.videoHeight}`
+            });
+            
+            // Clear canvas first
+            this.ctx.fillStyle = '#000';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
             
             this.ctx.save();
             this.ctx.scale(-1, 1);
