@@ -67,6 +67,13 @@ class UVFaceFilter {
         
         // Use willReadFrequently for better performance with frequent getImageData calls
         this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+        
+        // Enable high-quality image smoothing for soft, smooth image
+        if (this.ctx) {
+            this.ctx.imageSmoothingEnabled = true;
+            this.ctx.imageSmoothingQuality = 'high';
+        }
+        
         deepLog('CONSTRUCTOR', 'Canvas context', { context: !!this.ctx });
         
         this.faceMesh = null;
@@ -157,6 +164,12 @@ class UVFaceFilter {
             const padding = isMobile ? 12 : 20;
             const logoSize = isMobile ? 50 : 60; // Smaller on mobile
             
+            // Get display dimensions (accounting for device pixel ratio)
+            const devicePixelRatio = window.devicePixelRatio || 1;
+            const dpr = Math.min(devicePixelRatio, 2);
+            const displayWidth = this.canvas.width / dpr;
+            const displayHeight = this.canvas.height / dpr;
+            
             // Ensure canvas dimensions are valid
             if (!this.canvas.width || !this.canvas.height) {
                 deepLog('LOGO', 'Canvas dimensions invalid', {
@@ -168,8 +181,8 @@ class UVFaceFilter {
             
             // If we have a logo image, draw it
             if (this.logoImage && this.logoImage.complete && this.logoImage.naturalWidth > 0) {
-                const x = this.canvas.width - logoSize - padding;
-                const y = this.canvas.height - logoSize - padding;
+                const x = displayWidth - logoSize - padding;
+                const y = displayHeight - logoSize - padding;
                 
                 // Draw with semi-transparent background for visibility
                 this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
@@ -181,8 +194,12 @@ class UVFaceFilter {
                 // Draw text logo as fallback
                 const text = 'UV';
                 const fontSize = isMobile ? 20 : 24;
-                const x = this.canvas.width - padding;
-                const y = this.canvas.height - padding;
+                const devicePixelRatio = window.devicePixelRatio || 1;
+                const dpr = Math.min(devicePixelRatio, 2);
+                const displayWidth = this.canvas.width / dpr;
+                const displayHeight = this.canvas.height / dpr;
+                const x = displayWidth - padding;
+                const y = displayHeight - padding;
                 
                 // Draw text with shadow for visibility
                 this.ctx.font = `bold ${fontSize}px Arial`;
@@ -545,22 +562,43 @@ class UVFaceFilter {
             windowAspect
         });
         
+        // Get device pixel ratio for high-resolution rendering
+        const devicePixelRatio = window.devicePixelRatio || 1;
+        const dpr = Math.min(devicePixelRatio, 2); // Cap at 2x for performance
+        
+        // Calculate display dimensions
+        let displayWidth, displayHeight;
         if (videoAspect > windowAspect) {
-            this.canvas.width = windowWidth;
-            this.canvas.height = windowWidth / videoAspect;
+            displayWidth = windowWidth;
+            displayHeight = windowWidth / videoAspect;
         } else {
-            this.canvas.width = windowHeight * videoAspect;
-            this.canvas.height = windowHeight;
+            displayWidth = windowHeight * videoAspect;
+            displayHeight = windowHeight;
         }
         
-        deepLog('CANVAS', 'Canvas dimensions set', {
-            width: this.canvas.width,
-            height: this.canvas.height
-        });
+        // Set canvas internal resolution higher for better quality
+        this.canvas.width = displayWidth * dpr;
+        this.canvas.height = displayHeight * dpr;
         
-        this.canvas.style.width = '100vw';
-        this.canvas.style.height = '100vh';
+        // CSS size stays at display size
+        this.canvas.style.width = displayWidth + 'px';
+        this.canvas.style.height = displayHeight + 'px';
         this.canvas.style.objectFit = 'cover';
+        
+        // Scale context to match device pixel ratio
+        this.ctx.scale(dpr, dpr);
+        
+        // Enable high-quality image smoothing for soft, smooth rendering
+        this.ctx.imageSmoothingEnabled = true;
+        this.ctx.imageSmoothingQuality = 'high';
+        
+        deepLog('CANVAS', 'Canvas dimensions set', {
+            internalWidth: this.canvas.width,
+            internalHeight: this.canvas.height,
+            displayWidth: displayWidth,
+            displayHeight: displayHeight,
+            devicePixelRatio: dpr
+        });
         
         // Canvas setup complete
     }
@@ -791,19 +829,28 @@ class UVFaceFilter {
                 return;
             }
             
+            // Get display dimensions (accounting for device pixel ratio)
+            const devicePixelRatio = window.devicePixelRatio || 1;
+            const dpr = Math.min(devicePixelRatio, 2);
+            const displayWidth = this.canvas.width / dpr;
+            const displayHeight = this.canvas.height / dpr;
+            
             // Clear canvas
             this.ctx.fillStyle = '#000';
-            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            this.ctx.fillRect(0, 0, displayWidth, displayHeight);
             
-            // Draw video frame (mirrored)
+            // Draw video frame (mirrored) at display size
             this.ctx.save();
             this.ctx.scale(-1, 1);
-            this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
+            this.ctx.drawImage(this.video, -displayWidth, 0, displayWidth, displayHeight);
             this.ctx.restore();
             
-            // Get image data for processing
+            // Get image data for processing (at full internal resolution)
             const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
             const data = imageData.data;
+            
+            // Apply light smoothing for softer image (before inversion)
+            this.applyLightSmoothing(imageData);
             
             // Apply UV filter to every pixel - simple color inversion
             for (let i = 0; i < data.length; i += 4) {
