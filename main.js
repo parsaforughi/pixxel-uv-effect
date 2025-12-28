@@ -341,24 +341,30 @@ class UVFaceFilter {
             this.logVideoState();
             this.logStreamState();
             
-            if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
-                deepLog('VIDEO_EVENT', 'Video dimensions valid', {
-                    width: this.video.videoWidth,
-                    height: this.video.videoHeight
-                });
-                this.setupCanvas();
-                this.videoReady = true;
-                
-                if (!this.fallbackActive && !this.mediaPipeReady) {
-                    deepLog('VIDEO_EVENT', 'Starting immediate fallback render loop');
-                    this.startImmediateFallback();
+                if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
+                    deepLog('VIDEO_EVENT', 'Video dimensions valid', {
+                        width: this.video.videoWidth,
+                        height: this.video.videoHeight
+                    });
+                    this.setupCanvas();
+                    this.videoReady = true;
+                    
+                    // ALWAYS start fallback render loop first - ensures video is always displayed
+                    if (!this.renderLoopActive) {
+                        deepLog('VIDEO_EVENT', 'Starting immediate fallback render loop');
+                        this.startImmediateFallback();
+                    }
+                    
+                    // Try FaceMesh but don't wait for it - fallback is already running
+                    setTimeout(() => {
+                        if (!this.fallbackActive) {
+                            this.setupFaceMesh();
+                        }
+                    }, 500);
+                } else {
+                    deepLog('VIDEO_EVENT', 'ERROR: Video dimensions are zero');
+                    this.activateHardFallback('Video dimensions are zero', false);
                 }
-                
-                this.setupFaceMesh();
-            } else {
-                deepLog('VIDEO_EVENT', 'ERROR: Video dimensions are zero');
-                this.activateHardFallback('Video dimensions are zero', false);
-            }
         };
         
         this.onCanPlay = () => {
@@ -465,9 +471,18 @@ class UVFaceFilter {
             Camera: typeof Camera
         });
         
+        // If fallback is already active and working, skip FaceMesh entirely
+        if (this.fallbackActive && this.renderLoopActive) {
+            deepLog('FACEMESH', 'Fallback already active and working, skipping FaceMesh setup');
+            return;
+        }
+        
         if (typeof FaceMesh === 'undefined') {
-            deepLog('FACEMESH', 'ERROR: FaceMesh not available');
-            this.activateHardFallback('MediaPipe FaceMesh not loaded', false);
+            deepLog('FACEMESH', 'ERROR: FaceMesh not available - staying in fallback mode');
+            // Don't activate fallback again if already active
+            if (!this.fallbackActive) {
+                this.activateHardFallback('MediaPipe FaceMesh not loaded', false);
+            }
             return;
         }
         
@@ -600,24 +615,58 @@ class UVFaceFilter {
         this.fallbackActive = true;
         this.renderLoopActive = true;
         
+        let lastFrameTime = 0;
+        const targetFPS = 30;
+        const frameInterval = 1000 / targetFPS;
+        
         const drawFrame = () => {
             try {
+                const now = performance.now();
+                const elapsed = now - lastFrameTime;
+                
+                // Throttle to target FPS
+                if (elapsed < frameInterval) {
+                    this.animationFrame = requestAnimationFrame(drawFrame);
+                    return;
+                }
+                lastFrameTime = now;
+                
                 if (!this.video || !this.ctx) {
                     deepLog('FALLBACK', 'Missing video or ctx, waiting...');
+                    this.drawDebugOverlay('WAITING FOR ELEMENTS...');
                     this.animationFrame = requestAnimationFrame(drawFrame);
                     return;
                 }
                 
-                if (this.video.readyState >= this.video.HAVE_CURRENT_DATA && this.video.videoWidth > 0) {
-                    this.drawRawVideoFrame();
+                // Check video state
+                const videoReady = this.video.readyState >= this.video.HAVE_CURRENT_DATA;
+                const hasDimensions = this.video.videoWidth > 0 && this.video.videoHeight > 0;
+                
+                if (videoReady && hasDimensions) {
+                    // Draw video frame
+                    this.ctx.fillStyle = '#000';
+                    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                    
+                    this.ctx.save();
+                    this.ctx.scale(-1, 1);
+                    this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
+                    this.ctx.restore();
+                    
+                    // Draw debug overlay
+                    this.drawDebugOverlay('VIDEO ACTIVE');
+                    
+                    this.frameCount++;
                 } else {
                     deepLog('FALLBACK', 'Waiting for video data', {
                         readyState: this.video.readyState,
                         HAVE_CURRENT_DATA: this.video.HAVE_CURRENT_DATA,
-                        videoWidth: this.video.videoWidth
+                        videoWidth: this.video.videoWidth,
+                        videoHeight: this.video.videoHeight,
+                        hasSrcObject: !!this.video.srcObject
                     });
-                    this.drawDebugOverlay('WAITING FOR VIDEO DATA...');
+                    this.drawDebugOverlay('WAITING FOR VIDEO...');
                 }
+                
                 this.animationFrame = requestAnimationFrame(drawFrame);
             } catch (error) {
                 deepLog('FALLBACK', 'ERROR in fallback drawFrame', {
@@ -625,7 +674,7 @@ class UVFaceFilter {
                     message: error.message,
                     stack: error.stack
                 });
-                this.drawDebugOverlay('FALLBACK ERROR: ' + error.message);
+                this.drawDebugOverlay('ERROR: ' + error.message.substring(0, 25));
                 this.animationFrame = requestAnimationFrame(drawFrame);
             }
         };
@@ -812,6 +861,11 @@ class UVFaceFilter {
     
     processFrame(results) {
         try {
+            // If fallback is active, ignore FaceMesh results
+            if (this.fallbackActive) {
+                return;
+            }
+            
             deepLog('PROCESS', 'processFrame() called', {
                 hasResults: !!results,
                 hasLandmarks: !!(results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0),
@@ -819,8 +873,7 @@ class UVFaceFilter {
             });
             
             if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
-                deepLog('PROCESS', 'No face detected, drawing inverted frame');
-                this.drawInvertedFrame();
+                // Don't draw inverted frame - let fallback handle it
                 return;
             }
             
@@ -831,18 +884,25 @@ class UVFaceFilter {
                 deepLog('PROCESS', 'FaceMesh timeout cleared - face detected');
             }
             
+            // Temporarily disable fallback to render UV filter
+            const wasFallbackActive = this.fallbackActive;
+            this.fallbackActive = false;
+            
             const landmarks = results.multiFaceLandmarks[0];
             deepLog('PROCESS', 'Processing face landmarks', {
                 landmarksCount: landmarks.length
             });
             this.applyUVFilter(landmarks);
+            
+            // Restore fallback state
+            this.fallbackActive = wasFallbackActive;
         } catch (error) {
             deepLog('PROCESS', 'ERROR in processFrame', {
                 name: error.name,
                 message: error.message,
                 stack: error.stack
             });
-            this.drawInvertedFrame();
+            // Don't draw inverted - fallback will handle it
         }
     }
     
