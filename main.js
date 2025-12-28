@@ -723,10 +723,14 @@ class UVFaceFilter {
                 const g = data[i + 1];
                 const b = data[i + 2];
                 
-                // Detect sunscreen - very bright/white areas (sunscreen is usually white/light)
-                // After inversion, these become very dark - make them black
+                // Detect sunscreen - very bright/white areas (sunscreen is usually white/light cream)
+                // Sunscreen blocks UV light, so it appears black in UV view
                 const brightness = (r + g + b) / 3;
-                const isSunscreen = brightness > 200; // Very bright = likely sunscreen
+                // Check for white/light cream color (high brightness, low saturation)
+                const maxChannel = Math.max(r, g, b);
+                const minChannel = Math.min(r, g, b);
+                const saturation = maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
+                const isSunscreen = brightness > 180 && saturation < 0.3; // Bright and low saturation = sunscreen
                 
                 if (isSunscreen) {
                     // Sunscreen blocks UV - appears black in UV view
