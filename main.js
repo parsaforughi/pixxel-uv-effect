@@ -122,13 +122,20 @@ class UVFaceFilter {
     loadLogo() {
         // Try to load logo image if it exists
         const logoImg = new Image();
+        logoImg.crossOrigin = 'anonymous'; // Allow cross-origin if needed
         logoImg.onload = () => {
             this.logoImage = logoImg;
             this.logoLoaded = true;
-            deepLog('LOGO', 'Logo image loaded successfully');
+            deepLog('LOGO', 'Logo image loaded successfully', {
+                width: logoImg.naturalWidth,
+                height: logoImg.naturalHeight,
+                complete: logoImg.complete
+            });
         };
-        logoImg.onerror = () => {
-            deepLog('LOGO', 'Logo image not found, will use text logo');
+        logoImg.onerror = (error) => {
+            deepLog('LOGO', 'Logo image not found, will use text logo', {
+                error: error
+            });
             this.logoLoaded = true; // Still mark as loaded so we can draw text logo
         };
         logoImg.src = './pixxel.png'; // Try to load pixxel.png
@@ -136,18 +143,36 @@ class UVFaceFilter {
     
     drawLogo() {
         try {
-            if (!this.ctx || !this.logoLoaded) return;
+            if (!this.ctx || !this.logoLoaded) {
+                deepLog('LOGO', 'Cannot draw - ctx or logo not loaded', {
+                    hasCtx: !!this.ctx,
+                    logoLoaded: this.logoLoaded,
+                    hasLogoImage: !!this.logoImage
+                });
+                return;
+            }
             
-            const padding = 20;
-            const logoSize = 60; // Size of logo in pixels
+            // Responsive sizing for mobile
+            const isMobile = window.innerWidth < 768;
+            const padding = isMobile ? 12 : 20;
+            const logoSize = isMobile ? 50 : 60; // Smaller on mobile
+            
+            // Ensure canvas dimensions are valid
+            if (!this.canvas.width || !this.canvas.height) {
+                deepLog('LOGO', 'Canvas dimensions invalid', {
+                    width: this.canvas.width,
+                    height: this.canvas.height
+                });
+                return;
+            }
             
             // If we have a logo image, draw it
-            if (this.logoImage) {
+            if (this.logoImage && this.logoImage.complete && this.logoImage.naturalWidth > 0) {
                 const x = this.canvas.width - logoSize - padding;
                 const y = this.canvas.height - logoSize - padding;
                 
                 // Draw with semi-transparent background for visibility
-                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
                 this.ctx.fillRect(x - 5, y - 5, logoSize + 10, logoSize + 10);
                 
                 // Draw logo image
@@ -155,7 +180,7 @@ class UVFaceFilter {
             } else {
                 // Draw text logo as fallback
                 const text = 'UV';
-                const fontSize = 24;
+                const fontSize = isMobile ? 20 : 24;
                 const x = this.canvas.width - padding;
                 const y = this.canvas.height - padding;
                 
@@ -175,7 +200,8 @@ class UVFaceFilter {
         } catch (error) {
             deepLog('LOGO', 'ERROR drawing logo', {
                 name: error.name,
-                message: error.message
+                message: error.message,
+                stack: error.stack
             });
         }
     }
