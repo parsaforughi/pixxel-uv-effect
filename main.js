@@ -867,11 +867,17 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Color inversion - prevent pure black for bright backgrounds (walls, roof)
-                // Bright areas should invert to dark but not pure black
+                // Color inversion with reduced contrast - prevent pure black for bright backgrounds
+                // Use softer inversion to reduce contrast
                 let invertedR = 255 - r;
                 let invertedG = 255 - g;
                 let invertedB = 255 - b;
+                
+                // Soften the inversion to reduce contrast (blend with original)
+                const blendFactor = 0.85; // 85% inverted, 15% original for softer look
+                invertedR = invertedR * blendFactor + r * (1 - blendFactor);
+                invertedG = invertedG * blendFactor + g * (1 - blendFactor);
+                invertedB = invertedB * blendFactor + b * (1 - blendFactor);
                 
                 // Calculate original brightness to detect bright backgrounds
                 const originalBrightness = (r + g + b) / 3;
@@ -1278,7 +1284,7 @@ class UVFaceFilter {
                 }
             }
             
-            this.applyContrast(imageData, 1.8);
+            this.applyContrast(imageData, 1.0); // Minimal contrast for softer look
             this.applySoftBlur(imageData, skinMask, 2);
             
             this.ctx.putImageData(imageData, 0, 0);
