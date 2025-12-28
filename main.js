@@ -105,8 +105,8 @@ class UVFaceFilter {
             eyebrow: Object.keys(this.eyebrowLandmarks).length
         });
         
-        // Performance
-        this.processingScale = 0.75;
+        // Performance - use full resolution for better quality
+        this.processingScale = 1.0; // Full resolution for smoother, higher quality
         this.lastFrameTime = 0;
         this.targetFPS = 30;
         this.frameInterval = 1000 / this.targetFPS;
@@ -822,13 +822,22 @@ class UVFaceFilter {
             this.ctx.fillStyle = '#000';
             this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
             
-            // Draw video frame (mirrored)
+            // Enable high-quality image smoothing for video drawing
+            this.ctx.imageSmoothingEnabled = true;
+            this.ctx.imageSmoothingQuality = 'high';
+            
+            // Get display dimensions (accounting for device pixel ratio scaling)
+            const devicePixelRatio = window.devicePixelRatio || 1;
+            const displayWidth = this.canvas.width / devicePixelRatio;
+            const displayHeight = this.canvas.height / devicePixelRatio;
+            
+            // Draw video frame (mirrored) at full resolution
             this.ctx.save();
             this.ctx.scale(-1, 1);
-            this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
+            this.ctx.drawImage(this.video, -displayWidth, 0, displayWidth, displayHeight);
             this.ctx.restore();
             
-            // Get image data for processing
+            // Get image data for processing at full internal resolution
             const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
             const data = imageData.data;
             
