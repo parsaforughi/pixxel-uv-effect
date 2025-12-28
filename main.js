@@ -717,7 +717,7 @@ class UVFaceFilter {
             const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
             const data = imageData.data;
             
-            // Apply UV filter to every pixel
+            // Apply UV filter to every pixel - simple color inversion
             for (let i = 0; i < data.length; i += 4) {
                 const r = data[i];
                 const g = data[i + 1];
@@ -740,20 +740,14 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Invert colors first
-                const inverted = this.invertPixel(r, g, b);
-                
-                // Apply UV LUT - match TikTok UV filter look
-                // Pale white skin with deep blue/purple shadows
-                const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'skin');
-                
-                data[i] = uvColor.r;
-                data[i + 1] = uvColor.g;
-                data[i + 2] = uvColor.b;
+                // Simple color inversion - classic UV camera effect
+                data[i] = 255 - r;     // Invert red
+                data[i + 1] = 255 - g; // Invert green
+                data[i + 2] = 255 - b; // Invert blue
             }
             
-            // Apply aggressive contrast for dramatic effect
-            this.applyContrast(imageData, 2.2);
+            // Apply contrast for dramatic effect
+            this.applyContrast(imageData, 1.5);
             
             // Put processed image back
             this.ctx.putImageData(imageData, 0, 0);
