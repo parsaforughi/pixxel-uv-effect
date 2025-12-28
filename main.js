@@ -1522,6 +1522,48 @@ class UVFaceFilter {
         return a + (b - a) * t;
     }
     
+    applySoftSmoothing(imageData) {
+        // Light smoothing filter for soft image without changing contrast
+        const data = imageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+        const tempData = new Uint8ClampedArray(data);
+        
+        // Apply a light 3x3 Gaussian blur for smoothness
+        const radius = 1;
+        const step = 1; // Process every pixel for quality
+        
+        for (let y = radius; y < height - radius; y += step) {
+            for (let x = radius; x < width - radius; x += step) {
+                let rSum = 0, gSum = 0, bSum = 0, count = 0;
+                
+                // 3x3 kernel with Gaussian-like weights
+                const weights = [
+                    [1, 2, 1],
+                    [2, 4, 2],
+                    [1, 2, 1]
+                ];
+                
+                for (let dy = -radius; dy <= radius; dy++) {
+                    for (let dx = -radius; dx <= radius; dx++) {
+                        const idx = ((y + dy) * width + (x + dx)) * 4;
+                        const weight = weights[dy + radius][dx + radius];
+                        rSum += tempData[idx] * weight;
+                        gSum += tempData[idx + 1] * weight;
+                        bSum += tempData[idx + 2] * weight;
+                        count += weight;
+                    }
+                }
+                
+                const idx = (y * width + x) * 4;
+                // Blend 70% smoothed, 30% original for light smoothing
+                data[idx] = data[idx] * 0.3 + (rSum / count) * 0.7;
+                data[idx + 1] = data[idx + 1] * 0.3 + (gSum / count) * 0.7;
+                data[idx + 2] = data[idx + 2] * 0.3 + (bSum / count) * 0.7;
+            }
+        }
+    }
+    
     invertColors(imageData) {
         const data = imageData.data;
         for (let i = 0; i < data.length; i += 4) {
