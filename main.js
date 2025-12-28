@@ -333,8 +333,8 @@ class UVFaceFilter {
             const constraints = {
                 video: {
                     facingMode: 'user',
-                    width: { ideal: 1280, min: 640 },
-                    height: { ideal: 720, min: 480 }
+                    width: { ideal: 640 },
+                    height: { ideal: 480 }
                 }
             };
             
@@ -811,11 +811,10 @@ class UVFaceFilter {
                 const g = data[i + 1];
                 const b = data[i + 2];
                 
-                // Calculate brightness
-                const brightness = (r + g + b) / 3;
-                
                 // Detect sunscreen - very bright/white areas (sunscreen is usually white/light cream)
                 // Sunscreen blocks UV light, so it appears black in UV view
+                const brightness = (r + g + b) / 3;
+                // Check for white/light cream color (high brightness, low saturation)
                 const maxChannel = Math.max(r, g, b);
                 const minChannel = Math.min(r, g, b);
                 const saturation = maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
@@ -830,35 +829,13 @@ class UVFaceFilter {
                 }
                 
                 // Pure color inversion - classic UV camera effect
-                // White (255,255,255) should become black (0,0,0)
-                // Black (0,0,0) should become white (255,255,255)
-                let invertedR = 255 - r;
-                let invertedG = 255 - g;
-                let invertedB = 255 - b;
-                
-                // Ensure very bright areas (whites) become very dark (blacks)
-                // If original is very bright, make inverted very dark
-                if (brightness > 200) {
-                    // Very bright areas - make them very dark after inversion
-                    const darkenFactor = (255 - brightness) / 55; // 200->255 brightness becomes 0->55 dark
-                    invertedR = Math.min(30, invertedR * darkenFactor);
-                    invertedG = Math.min(30, invertedG * darkenFactor);
-                    invertedB = Math.min(30, invertedB * darkenFactor);
-                } else if (brightness > 150) {
-                    // Bright areas - darken them more
-                    const darkenFactor = 0.3;
-                    invertedR = invertedR * darkenFactor;
-                    invertedG = invertedG * darkenFactor;
-                    invertedB = invertedB * darkenFactor;
-                }
-                
-                data[i] = Math.max(0, Math.min(255, invertedR));
-                data[i + 1] = Math.max(0, Math.min(255, invertedG));
-                data[i + 2] = Math.max(0, Math.min(255, invertedB));
+                // No additional processing, just invert RGB values
+                data[i] = 255 - r;     // Invert red
+                data[i + 1] = 255 - g; // Invert green
+                data[i + 2] = 255 - b; // Invert blue
             }
             
-            // Apply soft smoothing for smooth image (no contrast change)
-            this.applySoftSmoothing(imageData);
+            // No contrast adjustment - pure inversion only
             
             // Put processed image back
             this.ctx.putImageData(imageData, 0, 0);
@@ -1542,48 +1519,6 @@ class UVFaceFilter {
     
     lerp(a, b, t) {
         return a + (b - a) * t;
-    }
-    
-    applySoftSmoothing(imageData) {
-        // Light smoothing filter for soft image without changing contrast
-        const data = imageData.data;
-        const width = imageData.width;
-        const height = imageData.height;
-        const tempData = new Uint8ClampedArray(data);
-        
-        // Apply a light 3x3 Gaussian blur for smoothness
-        const radius = 1;
-        const step = 1; // Process every pixel for quality
-        
-        for (let y = radius; y < height - radius; y += step) {
-            for (let x = radius; x < width - radius; x += step) {
-                let rSum = 0, gSum = 0, bSum = 0, count = 0;
-                
-                // 3x3 kernel with Gaussian-like weights
-                const weights = [
-                    [1, 2, 1],
-                    [2, 4, 2],
-                    [1, 2, 1]
-                ];
-                
-                for (let dy = -radius; dy <= radius; dy++) {
-                    for (let dx = -radius; dx <= radius; dx++) {
-                        const idx = ((y + dy) * width + (x + dx)) * 4;
-                        const weight = weights[dy + radius][dx + radius];
-                        rSum += tempData[idx] * weight;
-                        gSum += tempData[idx + 1] * weight;
-                        bSum += tempData[idx + 2] * weight;
-                        count += weight;
-                    }
-                }
-                
-                const idx = (y * width + x) * 4;
-                // Blend 70% smoothed, 30% original for light smoothing
-                data[idx] = data[idx] * 0.3 + (rSum / count) * 0.7;
-                data[idx + 1] = data[idx + 1] * 0.3 + (gSum / count) * 0.7;
-                data[idx + 2] = data[idx + 2] * 0.3 + (bSum / count) * 0.7;
-            }
-        }
     }
     
     invertColors(imageData) {
