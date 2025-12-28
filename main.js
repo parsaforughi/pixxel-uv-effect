@@ -493,6 +493,10 @@ class UVFaceFilter {
             deepLog('FACEMESH', 'FaceMesh options set');
             
             this.faceMesh.onResults((results) => {
+                if (this.fallbackActive) {
+                    deepLog('FACEMESH', 'Results received but fallback active, ignoring');
+                    return;
+                }
                 deepLog('FACEMESH', 'FaceMesh results received', {
                     hasResults: !!results,
                     hasImage: !!results.image,
@@ -503,12 +507,8 @@ class UVFaceFilter {
             
             deepLog('FACEMESH', 'FaceMesh onResults handler set');
             
-            this.faceMeshLoadTimeout = setTimeout(() => {
-                if (this.lastFaceDetected === 0) {
-                    deepLog('FACEMESH', 'FaceMesh timeout - no face detected');
-                    this.activateHardFallback('FaceMesh timeout - no face detected', false);
-                }
-            }, 5000);
+            // Don't timeout - let it try indefinitely, but switch to fallback if too many failures
+            this.faceMeshLoadTimeout = null;
             
             if (typeof Camera !== 'undefined') {
                 deepLog('FACEMESH', 'Initializing MediaPipe Camera utility', {
@@ -519,26 +519,32 @@ class UVFaceFilter {
                 if (this.video.videoWidth > 0 && this.video.videoHeight > 0) {
                     this.camera = new Camera(this.video, {
                         onFrame: async () => {
+                            // If fallback is active, don't process FaceMesh
+                            if (this.fallbackActive) {
+                                return;
+                            }
+                            
                             const now = performance.now();
                             if (now - this.lastFrameTime >= this.frameInterval) {
                                 this.lastFrameTime = now;
                                 if (!this.isProcessing && this.faceMesh && this.video.readyState >= this.video.HAVE_CURRENT_DATA) {
                                     this.isProcessing = true;
                                     try {
-                                        deepLog('FACEMESH', 'Sending frame to FaceMesh', {
-                                            frameCount: this.frameCount,
-                                            readyState: this.video.readyState
-                                        });
                                         await this.faceMesh.send({ image: this.video });
+                                        // Reset fail count on success
+                                        this.faceMeshFailCount = 0;
                                     } catch (error) {
                                         deepLog('FACEMESH', 'FaceMesh.send() ERROR', {
                                             name: error.name,
                                             message: error.message,
-                                            stack: error.stack
+                                            failCount: this.faceMeshFailCount + 1
                                         });
                                         this.faceMeshFailCount++;
-                                        if (this.faceMeshFailCount >= this.maxFaceMeshFailures) {
+                                        // Switch to fallback after 3 failures (not 10)
+                                        if (this.faceMeshFailCount >= 3) {
+                                            deepLog('FACEMESH', 'FaceMesh failures exceeded, switching to fallback');
                                             this.activateHardFallback('FaceMesh send failures exceeded', false);
+                                            return; // Stop processing
                                         }
                                     }
                                     this.isProcessing = false;
@@ -575,11 +581,19 @@ class UVFaceFilter {
     startImmediateFallback() {
         deepLog('FALLBACK', 'startImmediateFallback() called', {
             alreadyActive: this.fallbackActive,
-            renderLoopActive: this.renderLoopActive
+            renderLoopActive: this.renderLoopActive,
+            hasAnimationFrame: !!this.animationFrame
         });
         
-        if (this.fallbackActive) {
-            deepLog('FALLBACK', 'Fallback already active, skipping');
+        // Cancel existing render loop if any
+        if (this.animationFrame) {
+            cancelAnimationFrame(this.animationFrame);
+            this.animationFrame = null;
+            deepLog('FALLBACK', 'Cancelled existing animation frame');
+        }
+        
+        if (this.fallbackActive && this.renderLoopActive) {
+            deepLog('FALLBACK', 'Fallback already active and rendering, skipping');
             return;
         }
         
@@ -588,12 +602,19 @@ class UVFaceFilter {
         
         const drawFrame = () => {
             try {
-                if (this.video.readyState >= this.video.HAVE_CURRENT_DATA) {
+                if (!this.video || !this.ctx) {
+                    deepLog('FALLBACK', 'Missing video or ctx, waiting...');
+                    this.animationFrame = requestAnimationFrame(drawFrame);
+                    return;
+                }
+                
+                if (this.video.readyState >= this.video.HAVE_CURRENT_DATA && this.video.videoWidth > 0) {
                     this.drawRawVideoFrame();
                 } else {
                     deepLog('FALLBACK', 'Waiting for video data', {
                         readyState: this.video.readyState,
-                        HAVE_CURRENT_DATA: this.video.HAVE_CURRENT_DATA
+                        HAVE_CURRENT_DATA: this.video.HAVE_CURRENT_DATA,
+                        videoWidth: this.video.videoWidth
                     });
                     this.drawDebugOverlay('WAITING FOR VIDEO DATA...');
                 }
@@ -609,7 +630,7 @@ class UVFaceFilter {
             }
         };
         
-        deepLog('FALLBACK', 'Starting render loop');
+        deepLog('FALLBACK', 'Starting immediate fallback render loop');
         drawFrame();
     }
     
@@ -624,6 +645,13 @@ class UVFaceFilter {
                 streamActive: this.streamActive
             }
         });
+        
+        // Cancel existing render loop
+        if (this.animationFrame) {
+            cancelAnimationFrame(this.animationFrame);
+            this.animationFrame = null;
+            deepLog('FALLBACK', 'Cancelled existing animation frame');
+        }
         
         this.fallbackActive = true;
         this.renderLoopActive = true;
@@ -648,20 +676,29 @@ class UVFaceFilter {
         
         deepLog('FALLBACK', 'Camera stream remains active - switching to fallback rendering');
         this.logStreamState();
+        this.logVideoState();
         
         const drawFrame = () => {
             try {
-                if (this.video && this.video.readyState >= this.video.HAVE_CURRENT_DATA && this.video.videoWidth > 0) {
+                if (!this.video || !this.ctx) {
+                    deepLog('FALLBACK', 'Missing video or ctx');
+                    this.drawDebugOverlay('FALLBACK: Missing elements');
+                    this.animationFrame = requestAnimationFrame(drawFrame);
+                    return;
+                }
+                
+                if (this.video.readyState >= this.video.HAVE_CURRENT_DATA && this.video.videoWidth > 0) {
                     this.drawRawVideoFrame();
-                    this.drawDebugOverlay('FALLBACK MODE: ' + reason);
+                    this.drawDebugOverlay('FALLBACK MODE: ' + reason.substring(0, 30));
                 } else {
                     deepLog('FALLBACK', 'Video not ready for rendering', {
                         hasVideo: !!this.video,
                         readyState: this.video?.readyState,
                         videoWidth: this.video?.videoWidth,
-                        videoHeight: this.video?.videoHeight
+                        videoHeight: this.video?.videoHeight,
+                        hasSrcObject: !!this.video?.srcObject
                     });
-                    this.drawDebugOverlay('FALLBACK: ' + reason + ' | Video not ready');
+                    this.drawDebugOverlay('FALLBACK: ' + reason.substring(0, 20) + ' | Waiting...');
                 }
                 this.animationFrame = requestAnimationFrame(drawFrame);
             } catch (error) {
@@ -670,7 +707,7 @@ class UVFaceFilter {
                     message: error.message,
                     stack: error.stack
                 });
-                this.drawDebugOverlay('FALLBACK ERROR: ' + error.message);
+                this.drawDebugOverlay('FALLBACK ERROR: ' + error.message.substring(0, 30));
                 this.animationFrame = requestAnimationFrame(drawFrame);
             }
         };
