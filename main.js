@@ -723,10 +723,24 @@ class UVFaceFilter {
                 const g = data[i + 1];
                 const b = data[i + 2];
                 
+                // Detect sunscreen - very bright/white areas (sunscreen is usually white/light)
+                // After inversion, these become very dark - make them black
+                const brightness = (r + g + b) / 3;
+                const isSunscreen = brightness > 200; // Very bright = likely sunscreen
+                
+                if (isSunscreen) {
+                    // Sunscreen blocks UV - appears black in UV view
+                    data[i] = 0;     // R
+                    data[i + 1] = 0; // G
+                    data[i + 2] = 0; // B
+                    continue;
+                }
+                
                 // Invert colors first
                 const inverted = this.invertPixel(r, g, b);
                 
-                // Apply UV LUT - treat everything as "skin" for deep blue/cyan effect
+                // Apply UV LUT - match TikTok UV filter look
+                // Pale white skin with deep blue/purple shadows
                 const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'skin');
                 
                 data[i] = uvColor.r;
@@ -734,8 +748,8 @@ class UVFaceFilter {
                 data[i + 2] = uvColor.b;
             }
             
-            // Apply aggressive contrast
-            this.applyContrast(imageData, 1.8);
+            // Apply aggressive contrast for dramatic effect
+            this.applyContrast(imageData, 2.2);
             
             // Put processed image back
             this.ctx.putImageData(imageData, 0, 0);
@@ -1310,18 +1324,45 @@ class UVFaceFilter {
     applyUVLUT(r, g, b, type) {
         switch (type) {
             case 'skin':
-                return {
-                    r: Math.min(255, Math.max(0, b * 0.4 + r * 0.05)),
-                    g: Math.min(255, Math.max(0, b * 0.7 + g * 0.15)),
-                    b: Math.min(255, Math.max(0, b * 0.95 + r * 0.05))
-                };
+                // Match TikTok UV filter: pale white skin with deep blue/purple shadows
+                // Original inverted colors are used to create the UV effect
+                const brightness = (r + g + b) / 3;
+                
+                // Bright areas (normal skin) -> pale white/light blue
+                // Dark areas (shadows, sun damage) -> deep blue/purple
+                if (brightness > 128) {
+                    // Bright areas: pale white with slight blue tint
+                    return {
+                        r: Math.min(255, Math.max(200, brightness * 0.9 + r * 0.1)),
+                        g: Math.min(255, Math.max(200, brightness * 0.85 + g * 0.15)),
+                        b: Math.min(255, Math.max(220, brightness * 0.95 + b * 0.15))
+                    };
+                } else {
+                    // Dark areas: deep blue/purple (shadows, sun damage)
+                    return {
+                        r: Math.min(255, Math.max(0, r * 0.3 + b * 0.2)),
+                        g: Math.min(255, Math.max(0, g * 0.4 + b * 0.3)),
+                        b: Math.min(255, Math.max(80, b * 1.2 + r * 0.3))
+                    };
+                }
             case 'eye':
+                // Glowing white eyes with dark pupils
                 const eyeBrightness = (r + g + b) / 3;
-                return {
-                    r: Math.min(255, eyeBrightness * 1.3),
-                    g: Math.min(255, eyeBrightness * 1.3),
-                    b: Math.min(255, eyeBrightness * 1.3)
-                };
+                if (eyeBrightness > 100) {
+                    // Bright eyes -> glowing white
+                    return {
+                        r: Math.min(255, eyeBrightness * 1.5),
+                        g: Math.min(255, eyeBrightness * 1.5),
+                        b: Math.min(255, eyeBrightness * 1.5)
+                    };
+                } else {
+                    // Dark pupils -> very dark
+                    return {
+                        r: Math.max(0, eyeBrightness * 0.3),
+                        g: Math.max(0, eyeBrightness * 0.3),
+                        b: Math.max(0, eyeBrightness * 0.3)
+                    };
+                }
             case 'lip':
                 return {
                     r: Math.min(255, Math.max(0, g * 0.5 + r * 0.2)),
