@@ -556,6 +556,9 @@ class UVFaceFilter {
             return;
         }
         
+        // Get device pixel ratio for high-DPI displays
+        const devicePixelRatio = window.devicePixelRatio || 1;
+        
         const videoWidth = this.video.videoWidth;
         const videoHeight = this.video.videoHeight;
         const windowWidth = window.innerWidth;
@@ -569,25 +572,43 @@ class UVFaceFilter {
             windowWidth,
             windowHeight,
             videoAspect,
-            windowAspect
+            windowAspect,
+            devicePixelRatio
         });
         
+        // Calculate display size
+        let displayWidth, displayHeight;
         if (videoAspect > windowAspect) {
-            this.canvas.width = windowWidth;
-            this.canvas.height = windowWidth / videoAspect;
+            displayWidth = windowWidth;
+            displayHeight = windowWidth / videoAspect;
         } else {
-            this.canvas.width = windowHeight * videoAspect;
-            this.canvas.height = windowHeight;
+            displayWidth = windowHeight * videoAspect;
+            displayHeight = windowHeight;
         }
         
-        deepLog('CANVAS', 'Canvas dimensions set', {
-            width: this.canvas.width,
-            height: this.canvas.height
-        });
+        // Set canvas internal resolution to match device pixel ratio for crisp rendering
+        this.canvas.width = displayWidth * devicePixelRatio;
+        this.canvas.height = displayHeight * devicePixelRatio;
         
-        this.canvas.style.width = '100vw';
-        this.canvas.style.height = '100vh';
+        // Set canvas display size (CSS)
+        this.canvas.style.width = displayWidth + 'px';
+        this.canvas.style.height = displayHeight + 'px';
         this.canvas.style.objectFit = 'cover';
+        
+        // Scale context to match device pixel ratio
+        this.ctx.scale(devicePixelRatio, devicePixelRatio);
+        
+        // Enable high-quality image smoothing
+        this.ctx.imageSmoothingEnabled = true;
+        this.ctx.imageSmoothingQuality = 'high';
+        
+        deepLog('CANVAS', 'Canvas dimensions set', {
+            internalWidth: this.canvas.width,
+            internalHeight: this.canvas.height,
+            displayWidth: displayWidth,
+            displayHeight: displayHeight,
+            devicePixelRatio: devicePixelRatio
+        });
         
         // Canvas setup complete
     }
