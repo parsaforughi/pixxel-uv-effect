@@ -740,14 +740,14 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Simple color inversion - classic UV camera effect
+                // Pure color inversion - classic UV camera effect
+                // No additional processing, just invert RGB values
                 data[i] = 255 - r;     // Invert red
                 data[i + 1] = 255 - g; // Invert green
                 data[i + 2] = 255 - b; // Invert blue
             }
             
-            // Apply contrast for dramatic effect
-            this.applyContrast(imageData, 1.5);
+            // No contrast adjustment - pure inversion only
             
             // Put processed image back
             this.ctx.putImageData(imageData, 0, 0);
