@@ -839,10 +839,6 @@ class UVFaceFilter {
                 return;
             }
             
-            // Clear canvas
-            this.ctx.fillStyle = '#000';
-            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-            
             // Enable high-quality image smoothing for video drawing
             this.ctx.imageSmoothingEnabled = true;
             this.ctx.imageSmoothingQuality = 'high';
@@ -851,6 +847,10 @@ class UVFaceFilter {
             const devicePixelRatio = window.devicePixelRatio || 1;
             const displayWidth = this.canvas.width / devicePixelRatio;
             const displayHeight = this.canvas.height / devicePixelRatio;
+            
+            // Clear canvas using display dimensions
+            this.ctx.fillStyle = '#000';
+            this.ctx.fillRect(0, 0, displayWidth, displayHeight);
             
             // Draw video frame (mirrored) at full resolution
             this.ctx.save();
