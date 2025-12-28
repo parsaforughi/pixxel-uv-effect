@@ -131,7 +131,7 @@ class UVFaceFilter {
             deepLog('LOGO', 'Logo image not found, will use text logo');
             this.logoLoaded = true; // Still mark as loaded so we can draw text logo
         };
-        logoImg.src = './logo.webp'; // Try to load logo.webp
+        logoImg.src = './pixxel.png'; // Try to load pixxel.png
     }
     
     drawLogo() {
