@@ -848,28 +848,34 @@ class UVFaceFilter {
             this.ctx.fillStyle = '#000';
             this.ctx.fillRect(0, 0, displayWidth, displayHeight);
             
-            // Draw video frame (mirrored) at full resolution, covering entire viewport
+            // Draw video frame (mirrored) maintaining aspect ratio (object-fit: cover behavior)
             this.ctx.save();
             this.ctx.scale(-1, 1);
-            // Draw video to fill entire canvas, maintaining aspect ratio
+            
             const videoAspect = this.video.videoWidth / this.video.videoHeight;
             const canvasAspect = displayWidth / displayHeight;
             
             let drawWidth, drawHeight, drawX, drawY;
+            
             if (videoAspect > canvasAspect) {
-                // Video is wider - fit to height
-                drawHeight = displayHeight;
-                drawWidth = drawHeight * videoAspect;
-                drawX = -(displayWidth + (drawWidth - displayWidth) / 2);
-                drawY = 0;
-            } else {
-                // Video is taller - fit to width
+                // Video is wider than canvas - fit to width, crop height
                 drawWidth = displayWidth;
                 drawHeight = drawWidth / videoAspect;
                 drawX = -displayWidth;
                 drawY = (displayHeight - drawHeight) / 2;
+            } else {
+                // Video is taller than canvas - fit to height, crop width
+                drawHeight = displayHeight;
+                drawWidth = drawHeight * videoAspect;
+                drawX = -(displayWidth + (drawWidth - displayWidth) / 2);
+                drawY = 0;
             }
             
+            // Fill background first to avoid black bars
+            this.ctx.fillStyle = '#000';
+            this.ctx.fillRect(-displayWidth, 0, displayWidth, displayHeight);
+            
+            // Draw video maintaining aspect ratio
             this.ctx.drawImage(this.video, drawX, drawY, drawWidth, drawHeight);
             this.ctx.restore();
             
