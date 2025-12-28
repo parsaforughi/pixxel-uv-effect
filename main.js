@@ -1711,30 +1711,36 @@ class UVFaceFilter {
     }
     
     applyEdgeBlur(imageData, mask, width, height) {
-        // Apply Gaussian blur ONLY on mask edges (8-12px adaptive)
+        // Apply Gaussian blur ONLY on mask edges (8-12px adaptive) - optimized for performance
         const data = imageData.data;
         const tempData = new Uint8ClampedArray(data);
-        const radius = 2; // 5x5 kernel for performance
         
-        // Only blur pixels near mask edges
-        for (let y = radius; y < height - radius; y++) {
-            for (let x = radius; x < width - radius; x++) {
+        // Only process edge pixels (skip center and far edges for performance)
+        const step = 1; // Process every pixel for quality, but optimize inner loops
+        for (let y = 4; y < height - 4; y += step) {
+            for (let x = 4; x < width - 4; x += step) {
                 const idx = y * width + x;
                 const maskVal = mask[idx] || 0;
                 
-                // Only blur if on edge (mask value between 0.1 and 0.9)
+                // Only blur if on edge (mask value between 0.05 and 0.95)
                 if (maskVal > 0.05 && maskVal < 0.95) {
+                    // Adaptive blur radius: 8-12px based on edge distance
+                    const edgeDistance = Math.abs(maskVal - 0.5) * 2; // 0 at edge, 1 at center/far
+                    const blurRadius = Math.floor(8 + (1 - edgeDistance) * 4); // 8-12px
+                    
+                    // Pre-calculate Gaussian weights for performance
                     let rSum = 0, gSum = 0, bSum = 0, count = 0;
+                    const sigma = blurRadius / 3; // Gaussian sigma
+                    const twoSigmaSq = 2 * sigma * sigma;
                     
-                    // Adaptive blur radius based on mask value
-                    const blurRadius = Math.floor(8 + (1 - Math.abs(maskVal - 0.5) * 2) * 4); // 8-12px
-                    
-                    for (let dy = -blurRadius; dy <= blurRadius; dy++) {
-                        for (let dx = -blurRadius; dx <= blurRadius; dx++) {
+                    // Sample in a square grid, but use Gaussian weighting
+                    const sampleStep = Math.max(1, Math.floor(blurRadius / 4)); // Adaptive sampling
+                    for (let dy = -blurRadius; dy <= blurRadius; dy += sampleStep) {
+                        for (let dx = -blurRadius; dx <= blurRadius; dx += sampleStep) {
                             const dist = Math.sqrt(dx * dx + dy * dy);
                             if (dist <= blurRadius) {
                                 const nIdx = ((y + dy) * width + (x + dx)) * 4;
-                                const weight = Math.exp(-(dist * dist) / (2 * blurRadius * blurRadius)); // Gaussian
+                                const weight = Math.exp(-(dist * dist) / twoSigmaSq); // Gaussian
                                 rSum += tempData[nIdx] * weight;
                                 gSum += tempData[nIdx + 1] * weight;
                                 bSum += tempData[nIdx + 2] * weight;
@@ -1744,11 +1750,11 @@ class UVFaceFilter {
                     }
                     
                     if (count > 0) {
-                        const blend = 1 - Math.abs(maskVal - 0.5) * 2; // Stronger blur at edges
+                        const blend = (1 - edgeDistance) * 0.7; // Stronger blur at exact edges
                         const idx4 = idx * 4;
-                        data[idx4] = this.lerp(data[idx4], rSum / count, blend * 0.6);
-                        data[idx4 + 1] = this.lerp(data[idx4 + 1], gSum / count, blend * 0.6);
-                        data[idx4 + 2] = this.lerp(data[idx4 + 2], bSum / count, blend * 0.6);
+                        data[idx4] = this.lerp(data[idx4], rSum / count, blend);
+                        data[idx4 + 1] = this.lerp(data[idx4 + 1], gSum / count, blend);
+                        data[idx4 + 2] = this.lerp(data[idx4 + 2], bSum / count, blend);
                     }
                 }
             }
