@@ -921,10 +921,10 @@ class UVFaceFilter {
                 const isBackground = invertedBrightness < 50 || (invertedBrightness > 220 && saturation < 0.15);
                 
                 if (isLikelySkin) {
-                    // Enhance blue/cyan for people - make it more intense
-                    data[i] = Math.min(255, invertedR * 0.3);           // Reduce red
-                    data[i + 1] = Math.min(255, invertedG * 0.7);       // Keep some green
-                    data[i + 2] = Math.min(255, invertedB * 1.3);       // Boost blue significantly
+                    // Slight blue enhancement for people - more subtle
+                    data[i] = Math.min(255, invertedR * 0.5);           // Reduce red slightly
+                    data[i + 1] = Math.min(255, invertedG * 0.85);      // Keep most green
+                    data[i + 2] = Math.min(255, invertedB * 1.1);       // Slight blue boost
                 } else if (isBackground) {
                     // Make background darker/less visible
                     const darkenFactor = invertedBrightness < 50 ? 0.3 : 0.5;
