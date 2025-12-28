@@ -364,28 +364,10 @@ class UVFaceFilter {
                     this.setupCanvas();
                     this.videoReady = true;
                     
-                    // ALWAYS start fallback render loop first - ensures video is always displayed
+                    // Start UV filter render loop immediately - no face detection needed
                     if (!this.renderLoopActive) {
-                        deepLog('VIDEO_EVENT', 'Starting immediate fallback render loop');
+                        deepLog('VIDEO_EVENT', 'Starting UV filter render loop');
                         this.startImmediateFallback();
-                    }
-                    
-                    // Try FaceMesh but don't wait for it - fallback is already running
-                    // Only setup once
-                    if (!this.faceMeshSetupAttempted) {
-                        console.log('Setting up FaceMesh in 500ms...');
-                        this.faceMeshSetupAttempted = true;
-                        setTimeout(() => {
-                            console.log('FaceMesh setup timeout fired');
-                            if (!this.faceMesh) { // Only setup if not already created
-                                console.log('Calling setupFaceMesh()...');
-                                this.setupFaceMesh();
-                            } else {
-                                console.log('FaceMesh already exists, skipping setup');
-                            }
-                        }, 500);
-                    } else {
-                        console.log('FaceMesh setup already attempted, skipping');
                     }
                 } else {
                     deepLog('VIDEO_EVENT', 'ERROR: Video dimensions are zero');
@@ -649,21 +631,16 @@ class UVFaceFilter {
     }
     
     startImmediateFallback() {
-        deepLog('FALLBACK', 'startImmediateFallback() called', {
-            alreadyActive: this.fallbackActive,
-            renderLoopActive: this.renderLoopActive,
-            hasAnimationFrame: !!this.animationFrame
-        });
+        deepLog('FALLBACK', 'startImmediateFallback() called - starting UV filter render loop');
         
         // Cancel existing render loop if any
         if (this.animationFrame) {
             cancelAnimationFrame(this.animationFrame);
             this.animationFrame = null;
-            deepLog('FALLBACK', 'Cancelled existing animation frame');
         }
         
-        if (this.fallbackActive && this.renderLoopActive) {
-            deepLog('FALLBACK', 'Fallback already active and rendering, skipping');
+        if (this.renderLoopActive) {
+            deepLog('FALLBACK', 'Render loop already active, skipping');
             return;
         }
         
@@ -687,7 +664,6 @@ class UVFaceFilter {
                 lastFrameTime = now;
                 
                 if (!this.video || !this.ctx) {
-                    deepLog('FALLBACK', 'Missing video or ctx, waiting...');
                     this.drawDebugOverlay('WAITING FOR ELEMENTS...');
                     this.animationFrame = requestAnimationFrame(drawFrame);
                     return;
@@ -698,44 +674,80 @@ class UVFaceFilter {
                 const hasDimensions = this.video.videoWidth > 0 && this.video.videoHeight > 0;
                 
                 if (videoReady && hasDimensions) {
-                    // Draw video frame
-                    this.ctx.fillStyle = '#000';
-                    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-                    
-                    this.ctx.save();
-                    this.ctx.scale(-1, 1);
-                    this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
-                    this.ctx.restore();
-                    
-                    // Draw debug overlay
-                    this.drawDebugOverlay('VIDEO ACTIVE');
-                    
+                    // Apply UV filter to entire video feed
+                    this.applyUVFilterToEntireFrame();
                     this.frameCount++;
                 } else {
-                    deepLog('FALLBACK', 'Waiting for video data', {
-                        readyState: this.video.readyState,
-                        HAVE_CURRENT_DATA: this.video.HAVE_CURRENT_DATA,
-                        videoWidth: this.video.videoWidth,
-                        videoHeight: this.video.videoHeight,
-                        hasSrcObject: !!this.video.srcObject
-                    });
                     this.drawDebugOverlay('WAITING FOR VIDEO...');
                 }
                 
                 this.animationFrame = requestAnimationFrame(drawFrame);
             } catch (error) {
-                deepLog('FALLBACK', 'ERROR in fallback drawFrame', {
+                deepLog('FALLBACK', 'ERROR in UV filter drawFrame', {
                     name: error.name,
-                    message: error.message,
-                    stack: error.stack
+                    message: error.message
                 });
                 this.drawDebugOverlay('ERROR: ' + error.message.substring(0, 25));
                 this.animationFrame = requestAnimationFrame(drawFrame);
             }
         };
         
-        deepLog('FALLBACK', 'Starting immediate fallback render loop');
+        deepLog('FALLBACK', 'Starting UV filter render loop');
         drawFrame();
+    }
+    
+    applyUVFilterToEntireFrame() {
+        try {
+            if (!this.ctx || !this.video || this.video.readyState < this.video.HAVE_CURRENT_DATA) {
+                return;
+            }
+            
+            // Clear canvas
+            this.ctx.fillStyle = '#000';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            
+            // Draw video frame (mirrored)
+            this.ctx.save();
+            this.ctx.scale(-1, 1);
+            this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
+            this.ctx.restore();
+            
+            // Get image data for processing
+            const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+            const data = imageData.data;
+            
+            // Apply UV filter to every pixel
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+                
+                // Invert colors first
+                const inverted = this.invertPixel(r, g, b);
+                
+                // Apply UV LUT - treat everything as "skin" for deep blue/cyan effect
+                const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'skin');
+                
+                data[i] = uvColor.r;
+                data[i + 1] = uvColor.g;
+                data[i + 2] = uvColor.b;
+            }
+            
+            // Apply aggressive contrast
+            this.applyContrast(imageData, 1.8);
+            
+            // Put processed image back
+            this.ctx.putImageData(imageData, 0, 0);
+            
+            // Draw debug overlay
+            this.drawDebugOverlay('UV CAMERA ACTIVE');
+            
+        } catch (error) {
+            deepLog('RENDER', 'ERROR in applyUVFilterToEntireFrame', {
+                name: error.name,
+                message: error.message
+            });
+        }
     }
     
     activateHardFallback(reason, stopMediaPipeOnly = true) {
