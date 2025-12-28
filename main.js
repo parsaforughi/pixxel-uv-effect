@@ -811,10 +811,11 @@ class UVFaceFilter {
                 const g = data[i + 1];
                 const b = data[i + 2];
                 
+                // Calculate brightness
+                const brightness = (r + g + b) / 3;
+                
                 // Detect sunscreen - very bright/white areas (sunscreen is usually white/light cream)
                 // Sunscreen blocks UV light, so it appears black in UV view
-                const brightness = (r + g + b) / 3;
-                // Check for white/light cream color (high brightness, low saturation)
                 const maxChannel = Math.max(r, g, b);
                 const minChannel = Math.min(r, g, b);
                 const saturation = maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
@@ -829,10 +830,31 @@ class UVFaceFilter {
                 }
                 
                 // Pure color inversion - classic UV camera effect
-                // No additional processing, just invert RGB values
-                data[i] = 255 - r;     // Invert red
-                data[i + 1] = 255 - g; // Invert green
-                data[i + 2] = 255 - b; // Invert blue
+                // White (255,255,255) should become black (0,0,0)
+                // Black (0,0,0) should become white (255,255,255)
+                let invertedR = 255 - r;
+                let invertedG = 255 - g;
+                let invertedB = 255 - b;
+                
+                // Ensure very bright areas (whites) become very dark (blacks)
+                // If original is very bright, make inverted very dark
+                if (brightness > 200) {
+                    // Very bright areas - make them very dark after inversion
+                    const darkenFactor = (255 - brightness) / 55; // 200->255 brightness becomes 0->55 dark
+                    invertedR = Math.min(30, invertedR * darkenFactor);
+                    invertedG = Math.min(30, invertedG * darkenFactor);
+                    invertedB = Math.min(30, invertedB * darkenFactor);
+                } else if (brightness > 150) {
+                    // Bright areas - darken them more
+                    const darkenFactor = 0.3;
+                    invertedR = invertedR * darkenFactor;
+                    invertedG = invertedG * darkenFactor;
+                    invertedB = invertedB * darkenFactor;
+                }
+                
+                data[i] = Math.max(0, Math.min(255, invertedR));
+                data[i + 1] = Math.max(0, Math.min(255, invertedG));
+                data[i + 2] = Math.max(0, Math.min(255, invertedB));
             }
             
             // Apply soft smoothing for smooth image (no contrast change)
