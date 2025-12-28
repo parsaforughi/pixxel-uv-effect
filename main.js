@@ -184,11 +184,7 @@ class UVFaceFilter {
                 const x = displayWidth - logoSize - padding;
                 const y = displayHeight - logoSize - padding;
                 
-                // Draw with semi-transparent background for visibility
-                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-                this.ctx.fillRect(x - 5, y - 5, logoSize + 10, logoSize + 10);
-                
-                // Draw logo image
+                // Draw logo image directly - no background or shadow
                 this.ctx.drawImage(this.logoImage, x, y, logoSize, logoSize);
             } else {
                 // Draw text logo as fallback
@@ -201,16 +197,12 @@ class UVFaceFilter {
                 const x = displayWidth - padding;
                 const y = displayHeight - padding;
                 
-                // Draw text with shadow for visibility
+                // Draw text without shadow
                 this.ctx.font = `bold ${fontSize}px Arial`;
                 this.ctx.textAlign = 'right';
                 this.ctx.textBaseline = 'bottom';
                 
-                // Shadow
-                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-                this.ctx.fillText(text, x + 2, y + 2);
-                
-                // Text
+                // Text only - no shadow
                 this.ctx.fillStyle = '#ffffff';
                 this.ctx.fillText(text, x, y);
             }
