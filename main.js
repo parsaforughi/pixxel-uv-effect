@@ -1560,6 +1560,42 @@ class UVFaceFilter {
         }
     }
     
+    applyLightSmoothing(imageData) {
+        // Light smoothing filter for softer, smoother image
+        // Uses a small 3x3 Gaussian-like kernel for subtle blur
+        const data = imageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+        const tempData = new Uint8ClampedArray(data);
+        
+        // Process every pixel with a 3x3 smoothing kernel
+        const radius = 1;
+        for (let y = radius; y < height - radius; y++) {
+            for (let x = radius; x < width - radius; x++) {
+                let rSum = 0, gSum = 0, bSum = 0, count = 0;
+                
+                // 3x3 kernel with center weight
+                for (let dy = -radius; dy <= radius; dy++) {
+                    for (let dx = -radius; dx <= radius; dx++) {
+                        const idx = ((y + dy) * width + (x + dx)) * 4;
+                        // Center pixel has more weight (5), edges have weight 1
+                        const weight = (dx === 0 && dy === 0) ? 5 : 1;
+                        rSum += tempData[idx] * weight;
+                        gSum += tempData[idx + 1] * weight;
+                        bSum += tempData[idx + 2] * weight;
+                        count += weight;
+                    }
+                }
+                
+                // Blend 70% smoothed, 30% original for light smoothing
+                const idx = (y * width + x) * 4;
+                data[idx] = data[idx] * 0.3 + (rSum / count) * 0.7;
+                data[idx + 1] = data[idx + 1] * 0.3 + (gSum / count) * 0.7;
+                data[idx + 2] = data[idx + 2] * 0.3 + (bSum / count) * 0.7;
+            }
+        }
+    }
+    
     clamp(value) {
         return Math.max(0, Math.min(255, value));
     }
