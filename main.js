@@ -569,13 +569,18 @@ class UVFaceFilter {
         }
         
         // Set canvas internal resolution higher for better quality
-        this.canvas.width = displayWidth * dpr;
-        this.canvas.height = displayHeight * dpr;
+        // Use full viewport dimensions to fill entire screen
+        this.canvas.width = windowWidth * dpr;
+        this.canvas.height = windowHeight * dpr;
         
-        // CSS size stays at display size
-        this.canvas.style.width = displayWidth + 'px';
-        this.canvas.style.height = displayHeight + 'px';
+        // Keep CSS at 100vw/100vh to fill entire viewport (no black areas)
+        // Don't override CSS - let it fill the screen
+        this.canvas.style.width = '100vw';
+        this.canvas.style.height = '100vh';
         this.canvas.style.objectFit = 'cover';
+        this.canvas.style.position = 'fixed';
+        this.canvas.style.top = '0';
+        this.canvas.style.left = '0';
         
         // Scale context to match device pixel ratio
         this.ctx.scale(dpr, dpr);
