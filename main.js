@@ -67,13 +67,6 @@ class UVFaceFilter {
         
         // Use willReadFrequently for better performance with frequent getImageData calls
         this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
-        
-        // Enable high-quality image smoothing for soft, smooth image
-        if (this.ctx) {
-            this.ctx.imageSmoothingEnabled = true;
-            this.ctx.imageSmoothingQuality = 'high';
-        }
-        
         deepLog('CONSTRUCTOR', 'Canvas context', { context: !!this.ctx });
         
         this.faceMesh = null;
@@ -164,12 +157,6 @@ class UVFaceFilter {
             const padding = isMobile ? 12 : 20;
             const logoSize = isMobile ? 50 : 60; // Smaller on mobile
             
-            // Get display dimensions (accounting for device pixel ratio)
-            const devicePixelRatio = window.devicePixelRatio || 1;
-            const dpr = Math.min(devicePixelRatio, 2);
-            const displayWidth = this.canvas.width / dpr;
-            const displayHeight = this.canvas.height / dpr;
-            
             // Ensure canvas dimensions are valid
             if (!this.canvas.width || !this.canvas.height) {
                 deepLog('LOGO', 'Canvas dimensions invalid', {
@@ -181,28 +168,32 @@ class UVFaceFilter {
             
             // If we have a logo image, draw it
             if (this.logoImage && this.logoImage.complete && this.logoImage.naturalWidth > 0) {
-                const x = displayWidth - logoSize - padding;
-                const y = displayHeight - logoSize - padding;
+                const x = this.canvas.width - logoSize - padding;
+                const y = this.canvas.height - logoSize - padding;
                 
-                // Draw logo image directly - no background or shadow
+                // Draw with semi-transparent background for visibility
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+                this.ctx.fillRect(x - 5, y - 5, logoSize + 10, logoSize + 10);
+                
+                // Draw logo image
                 this.ctx.drawImage(this.logoImage, x, y, logoSize, logoSize);
             } else {
                 // Draw text logo as fallback
                 const text = 'UV';
                 const fontSize = isMobile ? 20 : 24;
-                const devicePixelRatio = window.devicePixelRatio || 1;
-                const dpr = Math.min(devicePixelRatio, 2);
-                const displayWidth = this.canvas.width / dpr;
-                const displayHeight = this.canvas.height / dpr;
-                const x = displayWidth - padding;
-                const y = displayHeight - padding;
+                const x = this.canvas.width - padding;
+                const y = this.canvas.height - padding;
                 
-                // Draw text without shadow
+                // Draw text with shadow for visibility
                 this.ctx.font = `bold ${fontSize}px Arial`;
                 this.ctx.textAlign = 'right';
                 this.ctx.textBaseline = 'bottom';
                 
-                // Text only - no shadow
+                // Shadow
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                this.ctx.fillText(text, x + 2, y + 2);
+                
+                // Text
                 this.ctx.fillStyle = '#ffffff';
                 this.ctx.fillText(text, x, y);
             }
@@ -342,8 +333,8 @@ class UVFaceFilter {
             const constraints = {
                 video: {
                     facingMode: 'user',
-                    width: { ideal: 640 },
-                    height: { ideal: 480 }
+                    width: { ideal: 1280, min: 640 },
+                    height: { ideal: 720, min: 480 }
                 }
             };
             
@@ -554,43 +545,22 @@ class UVFaceFilter {
             windowAspect
         });
         
-        // Get device pixel ratio for high-resolution rendering
-        const devicePixelRatio = window.devicePixelRatio || 1;
-        const dpr = Math.min(devicePixelRatio, 2); // Cap at 2x for performance
-        
-        // Calculate display dimensions
-        let displayWidth, displayHeight;
         if (videoAspect > windowAspect) {
-            displayWidth = windowWidth;
-            displayHeight = windowWidth / videoAspect;
+            this.canvas.width = windowWidth;
+            this.canvas.height = windowWidth / videoAspect;
         } else {
-            displayWidth = windowHeight * videoAspect;
-            displayHeight = windowHeight;
+            this.canvas.width = windowHeight * videoAspect;
+            this.canvas.height = windowHeight;
         }
         
-        // Set canvas internal resolution higher for better quality
-        this.canvas.width = displayWidth * dpr;
-        this.canvas.height = displayHeight * dpr;
-        
-        // CSS size stays at display size
-        this.canvas.style.width = displayWidth + 'px';
-        this.canvas.style.height = displayHeight + 'px';
-        this.canvas.style.objectFit = 'cover';
-        
-        // Scale context to match device pixel ratio
-        this.ctx.scale(dpr, dpr);
-        
-        // Enable high-quality image smoothing for soft, smooth rendering
-        this.ctx.imageSmoothingEnabled = true;
-        this.ctx.imageSmoothingQuality = 'high';
-        
         deepLog('CANVAS', 'Canvas dimensions set', {
-            internalWidth: this.canvas.width,
-            internalHeight: this.canvas.height,
-            displayWidth: displayWidth,
-            displayHeight: displayHeight,
-            devicePixelRatio: dpr
+            width: this.canvas.width,
+            height: this.canvas.height
         });
+        
+        this.canvas.style.width = '100vw';
+        this.canvas.style.height = '100vh';
+        this.canvas.style.objectFit = 'cover';
         
         // Canvas setup complete
     }
@@ -821,29 +791,19 @@ class UVFaceFilter {
                 return;
             }
             
-            // Get display dimensions (accounting for device pixel ratio)
-            const devicePixelRatio = window.devicePixelRatio || 1;
-            const dpr = Math.min(devicePixelRatio, 2);
-            const displayWidth = this.canvas.width / dpr;
-            const displayHeight = this.canvas.height / dpr;
-            
             // Clear canvas
             this.ctx.fillStyle = '#000';
-            this.ctx.fillRect(0, 0, displayWidth, displayHeight);
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
             
-            // Draw video frame (mirrored) at display size
+            // Draw video frame (mirrored)
             this.ctx.save();
             this.ctx.scale(-1, 1);
-            this.ctx.drawImage(this.video, -displayWidth, 0, displayWidth, displayHeight);
+            this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
             this.ctx.restore();
             
-            // Get image data for processing (at full internal resolution)
+            // Get image data for processing
             const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
             const data = imageData.data;
-            
-            // Apply stronger noise reduction for human areas and light smoothing overall
-            this.applyNoiseReduction(imageData);
-            this.applyLightSmoothing(imageData);
             
             // Apply UV filter to every pixel - simple color inversion
             for (let i = 0; i < data.length; i += 4) {
@@ -868,64 +828,15 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Color inversion with reduced contrast - prevent pure black for bright backgrounds
-                // Use softer inversion to reduce contrast
-                let invertedR = 255 - r;
-                let invertedG = 255 - g;
-                let invertedB = 255 - b;
-                
-                // Soften the inversion to reduce contrast (blend with original)
-                const blendFactor = 0.85; // 85% inverted, 15% original for softer look
-                invertedR = invertedR * blendFactor + r * (1 - blendFactor);
-                invertedG = invertedG * blendFactor + g * (1 - blendFactor);
-                invertedB = invertedB * blendFactor + b * (1 - blendFactor);
-                
-                // Calculate original brightness to detect bright backgrounds
-                const originalBrightness = (r + g + b) / 3;
-                const invertedBrightness = (invertedR + invertedG + invertedB) / 3;
-                
-                // GLOBAL MINIMUM: Ensure NO pixel becomes pure black (0,0,0) - especially background
-                const globalMinValue = 25; // Minimum for all pixels to prevent pure black
-                
-                // If original was very bright (walls, roof, background), 
-                // prevent pure black and keep some color information
-                if (originalBrightness > 200) {
-                    // Very bright areas (white walls, roof) - invert but keep minimum values
-                    const minValue = Math.max(globalMinValue, 40); // Higher minimum for bright backgrounds
-                    invertedR = Math.max(minValue, invertedR);
-                    invertedG = Math.max(minValue, invertedG);
-                    invertedB = Math.max(minValue, invertedB);
-                } else if (originalBrightness > 150) {
-                    // Moderately bright areas - prevent pure black
-                    const minValue = Math.max(globalMinValue, 30);
-                    invertedR = Math.max(minValue, invertedR);
-                    invertedG = Math.max(minValue, invertedG);
-                    invertedB = Math.max(minValue, invertedB);
-                } else if (invertedBrightness < 30) {
-                    // Very dark after inversion (was very bright) - add minimum with blue tint
-                    const minValue = Math.max(globalMinValue, 25);
-                    invertedR = Math.max(minValue, invertedR * 0.4);
-                    invertedG = Math.max(minValue, invertedG * 0.6);
-                    invertedB = Math.max(minValue, invertedB * 0.8);
-                } else if (invertedBrightness < 60) {
-                    // Light shadows - prevent pure black
-                    const minValue = Math.max(globalMinValue, 20);
-                    invertedR = Math.max(minValue, invertedR * 0.7);
-                    invertedG = Math.max(minValue, invertedG * 0.8);
-                    invertedB = Math.max(minValue, invertedB * 0.9);
-                } else {
-                    // All other pixels (including background) - apply global minimum
-                    invertedR = Math.max(globalMinValue, invertedR);
-                    invertedG = Math.max(globalMinValue, invertedG);
-                    invertedB = Math.max(globalMinValue, invertedB);
-                }
-                
-                data[i] = invertedR;
-                data[i + 1] = invertedG;
-                data[i + 2] = invertedB;
+                // Pure color inversion - classic UV camera effect
+                // No additional processing, just invert RGB values
+                data[i] = 255 - r;     // Invert red
+                data[i + 1] = 255 - g; // Invert green
+                data[i + 2] = 255 - b; // Invert blue
             }
             
-            // No contrast adjustment - pure inversion only
+            // Apply soft smoothing for smooth image (no contrast change)
+            this.applySoftSmoothing(imageData);
             
             // Put processed image back
             this.ctx.putImageData(imageData, 0, 0);
@@ -1293,7 +1204,7 @@ class UVFaceFilter {
                 }
             }
             
-            this.applyContrast(imageData, 1.0); // Minimal contrast for softer look
+            this.applyContrast(imageData, 1.8);
             this.applySoftBlur(imageData, skinMask, 2);
             
             this.ctx.putImageData(imageData, 0, 0);
@@ -1599,89 +1510,6 @@ class UVFaceFilter {
                         data[idx * 4 + 2] = this.lerp(data[idx * 4 + 2], bSum / count, blend * 0.25);
                     }
                 }
-            }
-        }
-    }
-    
-    applyNoiseReduction(imageData) {
-        // Strong noise reduction specifically for human/face areas (center of frame)
-        const data = imageData.data;
-        const width = imageData.width;
-        const height = imageData.height;
-        const tempData = new Uint8ClampedArray(data);
-        
-        // Center area where humans typically are (middle 60% of frame)
-        const centerX = width / 2;
-        const centerY = height / 2;
-        const humanAreaRadius = Math.min(width, height) * 0.3;
-        
-        const radius = 1;
-        for (let y = radius; y < height - radius; y++) {
-            for (let x = radius; x < width - radius; x++) {
-                // Calculate distance from center
-                const dx = x - centerX;
-                const dy = y - centerY;
-                const distFromCenter = Math.sqrt(dx * dx + dy * dy);
-                
-                // Apply stronger noise reduction in center area (where humans are)
-                const isHumanArea = distFromCenter < humanAreaRadius;
-                if (!isHumanArea) continue; // Skip background areas
-                
-                let rSum = 0, gSum = 0, bSum = 0, count = 0;
-                
-                // 3x3 Gaussian-like kernel for noise reduction
-                for (let dy = -radius; dy <= radius; dy++) {
-                    for (let dx = -radius; dx <= radius; dx++) {
-                        const idx = ((y + dy) * width + (x + dx)) * 4;
-                        const weight = (dx === 0 && dy === 0) ? 4 : 1;
-                        rSum += tempData[idx] * weight;
-                        gSum += tempData[idx + 1] * weight;
-                        bSum += tempData[idx + 2] * weight;
-                        count += weight;
-                    }
-                }
-                
-                // Stronger blend for human areas (80% smoothed, 20% original)
-                const idx = (y * width + x) * 4;
-                data[idx] = data[idx] * 0.2 + (rSum / count) * 0.8;
-                data[idx + 1] = data[idx + 1] * 0.2 + (gSum / count) * 0.8;
-                data[idx + 2] = data[idx + 2] * 0.2 + (bSum / count) * 0.8;
-            }
-        }
-    }
-    
-    applyLightSmoothing(imageData) {
-        // Light smoothing filter for softer, smoother image
-        // Uses a small 3x3 Gaussian-like kernel for subtle blur
-        const data = imageData.data;
-        const width = imageData.width;
-        const height = imageData.height;
-        const tempData = new Uint8ClampedArray(data);
-        
-        // Process every pixel with a 3x3 smoothing kernel
-        const radius = 1;
-        for (let y = radius; y < height - radius; y++) {
-            for (let x = radius; x < width - radius; x++) {
-                let rSum = 0, gSum = 0, bSum = 0, count = 0;
-                
-                // 3x3 kernel with center weight
-                for (let dy = -radius; dy <= radius; dy++) {
-                    for (let dx = -radius; dx <= radius; dx++) {
-                        const idx = ((y + dy) * width + (x + dx)) * 4;
-                        // Center pixel has more weight (5), edges have weight 1
-                        const weight = (dx === 0 && dy === 0) ? 5 : 1;
-                        rSum += tempData[idx] * weight;
-                        gSum += tempData[idx + 1] * weight;
-                        bSum += tempData[idx + 2] * weight;
-                        count += weight;
-                    }
-                }
-                
-                // Blend 70% smoothed, 30% original for light smoothing
-                const idx = (y * width + x) * 4;
-                data[idx] = data[idx] * 0.3 + (rSum / count) * 0.7;
-                data[idx + 1] = data[idx + 1] * 0.3 + (gSum / count) * 0.7;
-                data[idx + 2] = data[idx + 2] * 0.3 + (bSum / count) * 0.7;
             }
         }
     }
