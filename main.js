@@ -912,13 +912,19 @@ class UVFaceFilter {
                 let invertedG = 255 - g;
                 let invertedB = 255 - b;
                 
+                // Calculate saturation AFTER inversion (more accurate)
+                const invertedBrightness = (invertedR + invertedG + invertedB) / 3;
+                const invertedMax = Math.max(invertedR, invertedG, invertedB);
+                const invertedMin = Math.min(invertedR, invertedG, invertedB);
+                const invertedSaturation = invertedMax > 0 ? (invertedMax - invertedMin) / invertedMax : 0;
+                
                 // Detect if this is likely skin/person (medium brightness, some color)
                 // Skin tones after inversion are typically in the blue/cyan range
-                const invertedBrightness = (invertedR + invertedG + invertedB) / 3;
-                const isLikelySkin = invertedBrightness > 100 && invertedBrightness < 200 && saturation > 0.2;
+                // Improved detection range
+                const isLikelySkin = invertedBrightness > 80 && invertedBrightness < 220 && invertedSaturation > 0.15;
                 
                 // Detect if this is likely background (very dark or very bright after inversion)
-                const isBackground = invertedBrightness < 50 || (invertedBrightness > 220 && saturation < 0.15);
+                const isBackground = invertedBrightness < 50 || (invertedBrightness > 220 && invertedSaturation < 0.15);
                 
                 if (isLikelySkin) {
                     // Slight blue enhancement for people - more subtle
@@ -1578,22 +1584,25 @@ class UVFaceFilter {
     }
     
     applyNoiseReduction(imageData) {
-        // Simple noise reduction using a small blur kernel
+        // Light noise reduction using a small blur kernel
+        // Only process every other pixel for better performance and less blur
         const data = imageData.data;
         const width = imageData.width;
         const height = imageData.height;
         const tempData = new Uint8ClampedArray(data);
         
         // Apply a 3x3 Gaussian-like blur for noise reduction
+        // Process every 2 pixels for better performance
         const radius = 1;
-        for (let y = radius; y < height - radius; y++) {
-            for (let x = radius; x < width - radius; x++) {
+        const step = 2; // Process every other pixel
+        for (let y = radius; y < height - radius; y += step) {
+            for (let x = radius; x < width - radius; x += step) {
                 let rSum = 0, gSum = 0, bSum = 0, count = 0;
                 
                 for (let dy = -radius; dy <= radius; dy++) {
                     for (let dx = -radius; dx <= radius; dx++) {
                         const idx = ((y + dy) * width + (x + dx)) * 4;
-                        const weight = (dx === 0 && dy === 0) ? 4 : 1; // Center pixel has more weight
+                        const weight = (dx === 0 && dy === 0) ? 5 : 1; // Center pixel has more weight
                         rSum += tempData[idx] * weight;
                         gSum += tempData[idx + 1] * weight;
                         bSum += tempData[idx + 2] * weight;
@@ -1602,10 +1611,10 @@ class UVFaceFilter {
                 }
                 
                 const idx = (y * width + x) * 4;
-                // Blend 70% smoothed, 30% original for subtle noise reduction
-                data[idx] = data[idx] * 0.3 + (rSum / count) * 0.7;
-                data[idx + 1] = data[idx + 1] * 0.3 + (gSum / count) * 0.7;
-                data[idx + 2] = data[idx + 2] * 0.3 + (bSum / count) * 0.7;
+                // Blend 60% smoothed, 40% original for lighter noise reduction (less blur)
+                data[idx] = data[idx] * 0.4 + (rSum / count) * 0.6;
+                data[idx + 1] = data[idx + 1] * 0.4 + (gSum / count) * 0.6;
+                data[idx + 2] = data[idx + 2] * 0.4 + (bSum / count) * 0.6;
             }
         }
     }
