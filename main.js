@@ -110,8 +110,74 @@ class UVFaceFilter {
         this.faceMeshFailCount = 0;
         this.maxFaceMeshFailures = 10;
         
+        // Logo
+        this.logoImage = null;
+        this.logoLoaded = false;
+        this.loadLogo();
+        
         deepLog('CONSTRUCTOR', 'Initialization complete, calling init()');
         this.init();
+    }
+    
+    loadLogo() {
+        // Try to load logo image if it exists
+        const logoImg = new Image();
+        logoImg.onload = () => {
+            this.logoImage = logoImg;
+            this.logoLoaded = true;
+            deepLog('LOGO', 'Logo image loaded successfully');
+        };
+        logoImg.onerror = () => {
+            deepLog('LOGO', 'Logo image not found, will use text logo');
+            this.logoLoaded = true; // Still mark as loaded so we can draw text logo
+        };
+        logoImg.src = './logo.png'; // Try to load logo.png
+    }
+    
+    drawLogo() {
+        try {
+            if (!this.ctx || !this.logoLoaded) return;
+            
+            const padding = 20;
+            const logoSize = 60; // Size of logo in pixels
+            
+            // If we have a logo image, draw it
+            if (this.logoImage) {
+                const x = this.canvas.width - logoSize - padding;
+                const y = this.canvas.height - logoSize - padding;
+                
+                // Draw with semi-transparent background for visibility
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                this.ctx.fillRect(x - 5, y - 5, logoSize + 10, logoSize + 10);
+                
+                // Draw logo image
+                this.ctx.drawImage(this.logoImage, x, y, logoSize, logoSize);
+            } else {
+                // Draw text logo as fallback
+                const text = 'UV';
+                const fontSize = 24;
+                const x = this.canvas.width - padding;
+                const y = this.canvas.height - padding;
+                
+                // Draw text with shadow for visibility
+                this.ctx.font = `bold ${fontSize}px Arial`;
+                this.ctx.textAlign = 'right';
+                this.ctx.textBaseline = 'bottom';
+                
+                // Shadow
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                this.ctx.fillText(text, x + 2, y + 2);
+                
+                // Text
+                this.ctx.fillStyle = '#ffffff';
+                this.ctx.fillText(text, x, y);
+            }
+        } catch (error) {
+            deepLog('LOGO', 'ERROR drawing logo', {
+                name: error.name,
+                message: error.message
+            });
+        }
     }
     
     getSkinLandmarks() {
@@ -751,6 +817,9 @@ class UVFaceFilter {
             
             // Put processed image back
             this.ctx.putImageData(imageData, 0, 0);
+            
+            // Draw logo in bottom right corner
+            this.drawLogo();
             
             // Draw debug overlay
             this.drawDebugOverlay('UV CAMERA MODE');
