@@ -333,8 +333,8 @@ class UVFaceFilter {
             const constraints = {
                 video: {
                     facingMode: 'user',
-                    width: { ideal: 640 },
-                    height: { ideal: 480 }
+                    width: { ideal: 1280, min: 640 },
+                    height: { ideal: 720, min: 480 }
                 }
             };
             
@@ -828,11 +828,22 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Pure color inversion - classic UV camera effect
-                // No additional processing, just invert RGB values
-                data[i] = 255 - r;     // Invert red
-                data[i + 1] = 255 - g; // Invert green
-                data[i + 2] = 255 - b; // Invert blue
+                // Invert colors first
+                const invertedR = 255 - r;
+                const invertedG = 255 - g;
+                const invertedB = 255 - b;
+                
+                // Filter to only green and blue tones - remove red spectrum
+                // Keep green and blue channels, reduce/remove red
+                const greenBlueOnly = {
+                    r: Math.min(255, invertedG * 0.3),      // Minimal red from green
+                    g: Math.min(255, invertedG * 1.0),      // Full green
+                    b: Math.min(255, invertedB * 1.0)       // Full blue
+                };
+                
+                data[i] = greenBlueOnly.r;
+                data[i + 1] = greenBlueOnly.g;
+                data[i + 2] = greenBlueOnly.b;
             }
             
             // No contrast adjustment - pure inversion only
