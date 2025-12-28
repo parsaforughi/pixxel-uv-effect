@@ -368,9 +368,14 @@ class UVFaceFilter {
                     }
                     
                     // Try FaceMesh but don't wait for it - fallback is already running
+                    console.log('Setting up FaceMesh in 500ms...');
                     setTimeout(() => {
-                        if (!this.fallbackActive) {
+                        console.log('FaceMesh setup timeout fired, fallbackActive:', this.fallbackActive);
+                        if (!this.fallbackActive || true) { // Always try to setup FaceMesh
+                            console.log('Calling setupFaceMesh()...');
                             this.setupFaceMesh();
+                        } else {
+                            console.log('Skipping FaceMesh setup - fallback is active');
                         }
                     }, 500);
                 } else {
@@ -477,26 +482,28 @@ class UVFaceFilter {
     }
     
     setupFaceMesh() {
+        console.log('=== setupFaceMesh() CALLED ===');
         deepLog('FACEMESH', 'setupFaceMesh() called');
         deepLog('FACEMESH', 'MediaPipe availability', {
             FaceMesh: typeof FaceMesh,
             Camera: typeof Camera
         });
         
-        // If fallback is already active and working, skip FaceMesh entirely
-        if (this.fallbackActive && this.renderLoopActive) {
-            deepLog('FACEMESH', 'Fallback already active and working, skipping FaceMesh setup');
+        console.log('FaceMesh type:', typeof FaceMesh);
+        console.log('Camera type:', typeof Camera);
+        console.log('Fallback active:', this.fallbackActive);
+        console.log('Render loop active:', this.renderLoopActive);
+        
+        // Always try to setup FaceMesh - don't skip even if fallback is active
+        // FaceMesh can work alongside fallback
+        
+        if (typeof FaceMesh === 'undefined') {
+            console.error('ERROR: FaceMesh not available');
+            deepLog('FACEMESH', 'ERROR: FaceMesh not available - staying in fallback mode');
             return;
         }
         
-        if (typeof FaceMesh === 'undefined') {
-            deepLog('FACEMESH', 'ERROR: FaceMesh not available - staying in fallback mode');
-            // Don't activate fallback again if already active
-            if (!this.fallbackActive) {
-                this.activateHardFallback('MediaPipe FaceMesh not loaded', false);
-            }
-            return;
-        }
+        console.log('FaceMesh is available, proceeding with setup...');
         
         try {
             deepLog('FACEMESH', 'Creating FaceMesh instance');
@@ -520,6 +527,13 @@ class UVFaceFilter {
             deepLog('FACEMESH', 'FaceMesh options set');
             
             this.faceMesh.onResults((results) => {
+                const hasFace = results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0;
+                console.log('FaceMesh results:', {
+                    hasResults: !!results,
+                    hasFace: hasFace,
+                    landmarksCount: hasFace ? results.multiFaceLandmarks[0].length : 0
+                });
+                
                 deepLog('FACEMESH', 'FaceMesh results received', {
                     hasResults: !!results,
                     hasImage: !!results.image,
@@ -529,14 +543,14 @@ class UVFaceFilter {
                 });
                 
                 // If we have face landmarks, disable fallback temporarily to apply filter
-                if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                if (hasFace) {
+                    console.log('✓ FACE DETECTED! Applying UV filter');
                     deepLog('FACEMESH', 'Face detected! Applying UV filter');
                     // Temporarily disable fallback to render UV filter
-                    const wasFallbackActive = this.fallbackActive;
                     this.fallbackActive = false;
                     this.processFrame(results);
-                    // Don't restore fallback - let UV filter continue
                 } else {
+                    console.log('No face detected');
                     deepLog('FACEMESH', 'No face detected in results');
                     // Keep fallback active if no face
                 }
@@ -566,10 +580,12 @@ class UVFaceFilter {
                                         await this.faceMesh.send({ image: this.video });
                                         // Reset fail count on success
                                         this.faceMeshFailCount = 0;
-                                        deepLog('FACEMESH', 'Frame sent successfully', {
-                                            frameCount: this.frameCount
-                                        });
+                                        // Log every 30 frames (once per second at 30fps)
+                                        if (this.frameCount % 30 === 0) {
+                                            console.log('FaceMesh frame sent successfully, frame:', this.frameCount);
+                                        }
                                     } catch (error) {
+                                        console.error('FaceMesh.send() ERROR:', error);
                                         deepLog('FACEMESH', 'FaceMesh.send() ERROR', {
                                             name: error.name,
                                             message: error.message,
@@ -578,6 +594,7 @@ class UVFaceFilter {
                                         this.faceMeshFailCount++;
                                         // Switch to fallback after 5 failures (give it more chances)
                                         if (this.faceMeshFailCount >= 5) {
+                                            console.warn('FaceMesh failures exceeded, staying in fallback mode');
                                             deepLog('FACEMESH', 'FaceMesh failures exceeded, staying in fallback mode');
                                             // Don't activate hard fallback - just keep fallback active
                                             this.fallbackActive = true;
@@ -591,11 +608,14 @@ class UVFaceFilter {
                         height: this.video.videoHeight
                     });
                     
+                    console.log('✓ MediaPipe Camera instance created');
                     deepLog('FACEMESH', 'MediaPipe Camera instance created');
                     
                     this.camera.start();
+                    console.log('✓ MediaPipe Camera.start() called');
                     deepLog('FACEMESH', 'MediaPipe Camera.start() called');
                     this.mediaPipeReady = true;
+                    console.log('FaceMesh setup complete! Waiting for face detection...');
                 } else {
                     deepLog('FACEMESH', 'ERROR: Invalid video dimensions for Camera');
                     this.activateHardFallback('Invalid video dimensions for Camera', false);
