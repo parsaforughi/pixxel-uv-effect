@@ -883,16 +883,16 @@ class UVFaceFilter {
             const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
             const data = imageData.data;
             
-            // Apply UV filter to every pixel - simple color inversion
+            // Apply UV filter with background preservation
             for (let i = 0; i < data.length; i += 4) {
                 const r = data[i];
                 const g = data[i + 1];
                 const b = data[i + 2];
                 
+                const brightness = (r + g + b) / 3;
+                
                 // Detect sunscreen - very bright/white areas (sunscreen is usually white/light cream)
                 // Sunscreen blocks UV light, so it appears black in UV view
-                const brightness = (r + g + b) / 3;
-                // Check for white/light cream color (high brightness, low saturation)
                 const maxChannel = Math.max(r, g, b);
                 const minChannel = Math.min(r, g, b);
                 const saturation = maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
@@ -906,11 +906,26 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Pure color inversion - classic UV camera effect
-                // No additional processing, just invert RGB values
-                data[i] = 255 - r;     // Invert red
-                data[i + 1] = 255 - g; // Invert green
-                data[i + 2] = 255 - b; // Invert blue
+                // Preserve bright backgrounds (white/light areas) - keep them visible
+                // Only invert darker areas (skin, objects) for UV effect
+                if (brightness > 200) {
+                    // Very bright areas (white background) - keep mostly white, slight inversion for UV effect
+                    const invertAmount = 0.3; // Only invert 30% to keep background visible
+                    data[i] = r * (1 - invertAmount) + (255 - r) * invertAmount;
+                    data[i + 1] = g * (1 - invertAmount) + (255 - g) * invertAmount;
+                    data[i + 2] = b * (1 - invertAmount) + (255 - b) * invertAmount;
+                } else if (brightness > 150) {
+                    // Medium bright areas - partial inversion
+                    const invertAmount = 0.6;
+                    data[i] = r * (1 - invertAmount) + (255 - r) * invertAmount;
+                    data[i + 1] = g * (1 - invertAmount) + (255 - g) * invertAmount;
+                    data[i + 2] = b * (1 - invertAmount) + (255 - b) * invertAmount;
+                } else {
+                    // Dark areas (skin, objects) - full inversion for UV effect
+                    data[i] = 255 - r;     // Invert red
+                    data[i + 1] = 255 - g; // Invert green
+                    data[i + 2] = 255 - b; // Invert blue
+                }
             }
             
             // No contrast adjustment - pure inversion only
