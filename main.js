@@ -67,6 +67,13 @@ class UVFaceFilter {
         
         // Use willReadFrequently for better performance with frequent getImageData calls
         this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+        
+        // Enable high-quality image smoothing for logo
+        if (this.ctx) {
+            this.ctx.imageSmoothingEnabled = true;
+            this.ctx.imageSmoothingQuality = 'high';
+        }
+        
         deepLog('CONSTRUCTOR', 'Canvas context', { context: !!this.ctx });
         
         this.faceMesh = null;
@@ -152,10 +159,18 @@ class UVFaceFilter {
                 return;
             }
             
-            // Responsive sizing for mobile
+            // Enable high-quality image smoothing
+            this.ctx.imageSmoothingEnabled = true;
+            this.ctx.imageSmoothingQuality = 'high';
+            
+            // Responsive sizing for mobile - larger and higher resolution
             const isMobile = window.innerWidth < 768;
-            const padding = isMobile ? 12 : 20;
-            const logoSize = isMobile ? 50 : 60; // Smaller on mobile
+            const devicePixelRatio = window.devicePixelRatio || 1;
+            const padding = isMobile ? 15 : 25;
+            
+            // Higher resolution logo - scale up based on device pixel ratio
+            const baseLogoSize = isMobile ? 80 : 100;
+            const logoSize = baseLogoSize * Math.min(devicePixelRatio, 2); // Cap at 2x for performance
             
             // Ensure canvas dimensions are valid
             if (!this.canvas.width || !this.canvas.height) {
@@ -175,12 +190,24 @@ class UVFaceFilter {
                 this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
                 this.ctx.fillRect(x - 5, y - 5, logoSize + 10, logoSize + 10);
                 
-                // Draw logo image
-                this.ctx.drawImage(this.logoImage, x, y, logoSize, logoSize);
+                // Save context state
+                this.ctx.save();
+                
+                // Draw logo image with high quality
+                this.ctx.drawImage(
+                    this.logoImage, 
+                    x, 
+                    y, 
+                    logoSize, 
+                    logoSize
+                );
+                
+                // Restore context state
+                this.ctx.restore();
             } else {
                 // Draw text logo as fallback
                 const text = 'UV';
-                const fontSize = isMobile ? 20 : 24;
+                const fontSize = isMobile ? 28 : 32;
                 const x = this.canvas.width - padding;
                 const y = this.canvas.height - padding;
                 
