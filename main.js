@@ -536,7 +536,7 @@ class UVFaceFilter {
         this.canvas.style.height = '100vh';
         this.canvas.style.objectFit = 'cover';
         
-        this.drawDebugOverlay('CANVAS SETUP OK');
+        // Canvas setup complete
     }
     
     setupFaceMesh() {
@@ -731,7 +731,6 @@ class UVFaceFilter {
                 lastFrameTime = now;
                 
                 if (!this.video || !this.ctx) {
-                    this.drawDebugOverlay('WAITING FOR ELEMENTS...');
                     this.animationFrame = requestAnimationFrame(drawFrame);
                     return;
                 }
@@ -744,17 +743,14 @@ class UVFaceFilter {
                     // Apply UV filter to entire video feed
                     this.applyUVFilterToEntireFrame();
                     this.frameCount++;
-                } else {
-                    this.drawDebugOverlay('WAITING FOR VIDEO...');
                 }
                 
                 this.animationFrame = requestAnimationFrame(drawFrame);
-            } catch (error) {
+                } catch (error) {
                 deepLog('FALLBACK', 'ERROR in UV filter drawFrame', {
                     name: error.name,
                     message: error.message
                 });
-                this.drawDebugOverlay('ERROR: ' + error.message.substring(0, 25));
                 this.animationFrame = requestAnimationFrame(drawFrame);
             }
         };
@@ -821,9 +817,6 @@ class UVFaceFilter {
             // Draw logo in bottom right corner
             this.drawLogo();
             
-            // Draw debug overlay
-            this.drawDebugOverlay('UV CAMERA MODE');
-            
         } catch (error) {
             deepLog('RENDER', 'ERROR in applyUVFilterToEntireFrame', {
                 name: error.name,
@@ -880,14 +873,12 @@ class UVFaceFilter {
             try {
                 if (!this.video || !this.ctx) {
                     deepLog('FALLBACK', 'Missing video or ctx');
-                    this.drawDebugOverlay('FALLBACK: Missing elements');
                     this.animationFrame = requestAnimationFrame(drawFrame);
                     return;
                 }
                 
                 if (this.video.readyState >= this.video.HAVE_CURRENT_DATA && this.video.videoWidth > 0) {
                     this.drawRawVideoFrame();
-                    this.drawDebugOverlay('FALLBACK MODE: ' + reason.substring(0, 30));
                 } else {
                     deepLog('FALLBACK', 'Video not ready for rendering', {
                         hasVideo: !!this.video,
@@ -896,16 +887,14 @@ class UVFaceFilter {
                         videoHeight: this.video?.videoHeight,
                         hasSrcObject: !!this.video?.srcObject
                     });
-                    this.drawDebugOverlay('FALLBACK: ' + reason.substring(0, 20) + ' | Waiting...');
                 }
                 this.animationFrame = requestAnimationFrame(drawFrame);
-            } catch (error) {
+                } catch (error) {
                 deepLog('FALLBACK', 'ERROR in hard fallback drawFrame', {
                     name: error.name,
                     message: error.message,
                     stack: error.stack
                 });
-                this.drawDebugOverlay('FALLBACK ERROR: ' + error.message.substring(0, 30));
                 this.animationFrame = requestAnimationFrame(drawFrame);
             }
         };
@@ -948,11 +937,6 @@ class UVFaceFilter {
             this.ctx.scale(-1, 1);
             this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
             this.ctx.restore();
-            
-            // Draw debug rectangle
-            this.ctx.strokeStyle = '#ff0000';
-            this.ctx.lineWidth = 3;
-            this.ctx.strokeRect(10, 10, 100, 50);
             
             // Draw logo in bottom right corner
             this.drawLogo();
@@ -1102,7 +1086,7 @@ class UVFaceFilter {
             this.invertColors(imageData);
             this.ctx.putImageData(imageData, 0, 0);
             
-            this.drawDebugOverlay('INVERTED MODE');
+            // Inverted mode active
         } catch (error) {
             deepLog('RENDER', 'ERROR in drawInvertedFrame', {
                 name: error.name,
@@ -1197,7 +1181,7 @@ class UVFaceFilter {
             this.applySoftBlur(imageData, skinMask, 2);
             
             this.ctx.putImageData(imageData, 0, 0);
-            this.drawDebugOverlay('UV FILTER ACTIVE');
+            // UV filter active
             
             this.frameCount++;
         } catch (error) {
