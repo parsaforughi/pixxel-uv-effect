@@ -365,8 +365,9 @@ class UVFaceFilter {
                     this.videoReady = true;
                     
                     // Start UV filter render loop immediately - no face detection needed
+                    // UV filter applies to entire camera feed like a UV camera
                     if (!this.renderLoopActive) {
-                        deepLog('VIDEO_EVENT', 'Starting UV filter render loop');
+                        deepLog('VIDEO_EVENT', 'Starting UV camera filter render loop');
                         this.startImmediateFallback();
                     }
                 } else {
@@ -740,7 +741,7 @@ class UVFaceFilter {
             this.ctx.putImageData(imageData, 0, 0);
             
             // Draw debug overlay
-            this.drawDebugOverlay('UV CAMERA ACTIVE');
+            this.drawDebugOverlay('UV CAMERA MODE');
             
         } catch (error) {
             deepLog('RENDER', 'ERROR in applyUVFilterToEntireFrame', {
@@ -909,11 +910,7 @@ class UVFaceFilter {
             this.ctx.fillText('VIDEO OK', 20, 35);
             this.ctx.fillText('FRAME OK', 20, 55);
             
-            if (this.mediaPipeReady) {
-                this.ctx.fillText('FACEMESH OK', 20, 75);
-            } else {
-                this.ctx.fillText('FACEMESH: ' + (typeof FaceMesh !== 'undefined' ? 'LOADING' : 'FAILED'), 20, 75);
-            }
+            this.ctx.fillText('UV CAMERA MODE', 20, 75);
             
             if (text) {
                 this.ctx.fillText(text.substring(0, 40), 20, 95);
