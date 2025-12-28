@@ -954,6 +954,9 @@ class UVFaceFilter {
             this.ctx.lineWidth = 3;
             this.ctx.strokeRect(10, 10, 100, 50);
             
+            // Draw logo in bottom right corner
+            this.drawLogo();
+            
             this.frameCount++;
             
             // Log every 300 frames (every ~10 seconds at 30fps)
