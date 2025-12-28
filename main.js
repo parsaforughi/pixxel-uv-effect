@@ -67,13 +67,6 @@ class UVFaceFilter {
         
         // Use willReadFrequently for better performance with frequent getImageData calls
         this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
-        
-        // Enable high-quality image smoothing for logo
-        if (this.ctx) {
-            this.ctx.imageSmoothingEnabled = true;
-            this.ctx.imageSmoothingQuality = 'high';
-        }
-        
         deepLog('CONSTRUCTOR', 'Canvas context', { context: !!this.ctx });
         
         this.faceMesh = null;
@@ -105,8 +98,8 @@ class UVFaceFilter {
             eyebrow: Object.keys(this.eyebrowLandmarks).length
         });
         
-        // Performance - use full resolution for better quality
-        this.processingScale = 1.0; // Full resolution for smoother, higher quality
+        // Performance
+        this.processingScale = 0.75;
         this.lastFrameTime = 0;
         this.targetFPS = 30;
         this.frameInterval = 1000 / this.targetFPS;
@@ -159,18 +152,10 @@ class UVFaceFilter {
                 return;
             }
             
-            // Enable high-quality image smoothing
-            this.ctx.imageSmoothingEnabled = true;
-            this.ctx.imageSmoothingQuality = 'high';
-            
-            // Responsive sizing for mobile - larger and higher resolution
+            // Responsive sizing for mobile
             const isMobile = window.innerWidth < 768;
-            const devicePixelRatio = window.devicePixelRatio || 1;
-            const padding = isMobile ? 15 : 25;
-            
-            // Higher resolution logo - scale up based on device pixel ratio
-            const baseLogoSize = isMobile ? 80 : 100;
-            const logoSize = baseLogoSize * Math.min(devicePixelRatio, 2); // Cap at 2x for performance
+            const padding = isMobile ? 12 : 20;
+            const logoSize = isMobile ? 50 : 60; // Smaller on mobile
             
             // Ensure canvas dimensions are valid
             if (!this.canvas.width || !this.canvas.height) {
@@ -190,26 +175,14 @@ class UVFaceFilter {
                 this.ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
                 this.ctx.fillRect(x - 5, y - 5, logoSize + 10, logoSize + 10);
                 
-                // Save context state
-                this.ctx.save();
-                
-                // Draw logo image with high quality
-                this.ctx.drawImage(
-                    this.logoImage, 
-                    x, 
-                    y, 
-                    logoSize, 
-                    logoSize
-                );
-                
-                // Restore context state
-                this.ctx.restore();
+                // Draw logo image
+                this.ctx.drawImage(this.logoImage, x, y, logoSize, logoSize);
             } else {
                 // Draw text logo as fallback
                 const text = 'UV';
-                const fontSize = isMobile ? 28 : 32;
-                const x = displayWidth - padding;
-                const y = displayHeight - padding;
+                const fontSize = isMobile ? 20 : 24;
+                const x = this.canvas.width - padding;
+                const y = this.canvas.height - padding;
                 
                 // Draw text with shadow for visibility
                 this.ctx.font = `bold ${fontSize}px Arial`;
@@ -556,9 +529,6 @@ class UVFaceFilter {
             return;
         }
         
-        // Get device pixel ratio for high-DPI displays
-        const devicePixelRatio = window.devicePixelRatio || 1;
-        
         const videoWidth = this.video.videoWidth;
         const videoHeight = this.video.videoHeight;
         const windowWidth = window.innerWidth;
@@ -572,40 +542,25 @@ class UVFaceFilter {
             windowWidth,
             windowHeight,
             videoAspect,
-            windowAspect,
-            devicePixelRatio
+            windowAspect
         });
         
-        // Use full viewport dimensions to avoid black boxes
-        const displayWidth = windowWidth;
-        const displayHeight = windowHeight;
+        if (videoAspect > windowAspect) {
+            this.canvas.width = windowWidth;
+            this.canvas.height = windowWidth / videoAspect;
+        } else {
+            this.canvas.width = windowHeight * videoAspect;
+            this.canvas.height = windowHeight;
+        }
         
-        // Set canvas internal resolution to match device pixel ratio for crisp rendering
-        this.canvas.width = displayWidth * devicePixelRatio;
-        this.canvas.height = displayHeight * devicePixelRatio;
+        deepLog('CANVAS', 'Canvas dimensions set', {
+            width: this.canvas.width,
+            height: this.canvas.height
+        });
         
-        // Keep CSS at 100vw/100vh to fill entire viewport (no black boxes)
         this.canvas.style.width = '100vw';
         this.canvas.style.height = '100vh';
         this.canvas.style.objectFit = 'cover';
-        this.canvas.style.position = 'fixed';
-        this.canvas.style.top = '0';
-        this.canvas.style.left = '0';
-        
-        // Scale context to match device pixel ratio
-        this.ctx.scale(devicePixelRatio, devicePixelRatio);
-        
-        // Enable high-quality image smoothing
-        this.ctx.imageSmoothingEnabled = true;
-        this.ctx.imageSmoothingQuality = 'high';
-        
-        deepLog('CANVAS', 'Canvas dimensions set', {
-            internalWidth: this.canvas.width,
-            internalHeight: this.canvas.height,
-            displayWidth: displayWidth,
-            displayHeight: displayHeight,
-            devicePixelRatio: devicePixelRatio
-        });
         
         // Canvas setup complete
     }
@@ -836,55 +791,21 @@ class UVFaceFilter {
                 return;
             }
             
-            // Enable high-quality image smoothing for video drawing
-            this.ctx.imageSmoothingEnabled = true;
-            this.ctx.imageSmoothingQuality = 'high';
-            
-            // Use viewport dimensions
-            const displayWidth = window.innerWidth;
-            const displayHeight = window.innerHeight;
-            
-            // Clear canvas using viewport dimensions
+            // Clear canvas
             this.ctx.fillStyle = '#000';
-            this.ctx.fillRect(0, 0, displayWidth, displayHeight);
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
             
-            // Draw video frame (mirrored) maintaining aspect ratio without stretching
+            // Draw video frame (mirrored)
             this.ctx.save();
             this.ctx.scale(-1, 1);
-            
-            const videoAspect = this.video.videoWidth / this.video.videoHeight;
-            const canvasAspect = displayWidth / displayHeight;
-            
-            let drawWidth, drawHeight, drawX, drawY;
-            
-            // Calculate dimensions to cover entire canvas while maintaining aspect ratio
-            if (videoAspect > canvasAspect) {
-                // Video is wider than canvas - fit to width, crop height
-                drawWidth = displayWidth;
-                drawHeight = drawWidth / videoAspect;
-                drawX = -displayWidth;
-                drawY = (displayHeight - drawHeight) / 2;
-            } else {
-                // Video is taller than canvas - fit to height, crop width
-                drawHeight = displayHeight;
-                drawWidth = drawHeight * videoAspect;
-                drawX = -(displayWidth + (drawWidth - displayWidth) / 2);
-                drawY = 0;
-            }
-            
-            // Fill background to avoid black bars
-            this.ctx.fillStyle = '#000';
-            this.ctx.fillRect(-displayWidth, 0, displayWidth, displayHeight);
-            
-            // Draw video maintaining aspect ratio (no stretching)
-            this.ctx.drawImage(this.video, drawX, drawY, drawWidth, drawHeight);
+            this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
             this.ctx.restore();
             
-            // Get image data for processing at full internal resolution
+            // Get image data for processing
             const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
             const data = imageData.data;
             
-            // Apply UV filter with enhanced blue for people and darker background
+            // Apply UV filter to every pixel - simple color inversion
             for (let i = 0; i < data.length; i += 4) {
                 const r = data[i];
                 const g = data[i + 1];
@@ -907,46 +828,14 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Invert colors first
-                let invertedR = 255 - r;
-                let invertedG = 255 - g;
-                let invertedB = 255 - b;
-                
-                // Calculate saturation AFTER inversion (more accurate)
-                const invertedBrightness = (invertedR + invertedG + invertedB) / 3;
-                const invertedMax = Math.max(invertedR, invertedG, invertedB);
-                const invertedMin = Math.min(invertedR, invertedG, invertedB);
-                const invertedSaturation = invertedMax > 0 ? (invertedMax - invertedMin) / invertedMax : 0;
-                
-                // Detect if this is likely skin/person (medium brightness, some color)
-                // Skin tones after inversion are typically in the blue/cyan range
-                // Improved detection range
-                const isLikelySkin = invertedBrightness > 80 && invertedBrightness < 220 && invertedSaturation > 0.15;
-                
-                // Detect if this is likely background (very dark or very bright after inversion)
-                const isBackground = invertedBrightness < 50 || (invertedBrightness > 220 && invertedSaturation < 0.15);
-                
-                if (isLikelySkin) {
-                    // Slight blue enhancement for people - more subtle
-                    data[i] = Math.min(255, invertedR * 0.5);           // Reduce red slightly
-                    data[i + 1] = Math.min(255, invertedG * 0.85);      // Keep most green
-                    data[i + 2] = Math.min(255, invertedB * 1.1);       // Slight blue boost
-                } else if (isBackground) {
-                    // Make background darker/less visible
-                    const darkenFactor = invertedBrightness < 50 ? 0.3 : 0.5;
-                    data[i] = invertedR * darkenFactor;
-                    data[i + 1] = invertedG * darkenFactor;
-                    data[i + 2] = invertedB * darkenFactor;
-                } else {
-                    // Standard inversion for other areas
-                    data[i] = invertedR;
-                    data[i + 1] = invertedG;
-                    data[i + 2] = invertedB;
-                }
+                // Pure color inversion - classic UV camera effect
+                // No additional processing, just invert RGB values
+                data[i] = 255 - r;     // Invert red
+                data[i + 1] = 255 - g; // Invert green
+                data[i + 2] = 255 - b; // Invert blue
             }
             
-            // Apply noise reduction for smoother image
-            this.applyNoiseReduction(imageData);
+            // No contrast adjustment - pure inversion only
             
             // Put processed image back
             this.ctx.putImageData(imageData, 0, 0);
@@ -1243,115 +1132,82 @@ class UVFaceFilter {
                 return;
             }
             
-            // Get viewport dimensions
-            const devicePixelRatio = window.devicePixelRatio || 1;
-            const displayWidth = this.canvas.width / devicePixelRatio;
-            const displayHeight = this.canvas.height / devicePixelRatio;
+            deepLog('RENDER', 'Applying UV filter', {
+                landmarksCount: landmarks.length,
+                canvasSize: `${this.canvas.width}x${this.canvas.height}`,
+                videoSize: `${this.video.videoWidth}x${this.video.videoHeight}`
+            });
             
-            // Clear canvas - keep background untouched
+            // Clear canvas first
             this.ctx.fillStyle = '#000';
-            this.ctx.fillRect(0, 0, displayWidth, displayHeight);
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
             
-            // Draw video frame (mirrored) maintaining aspect ratio
             this.ctx.save();
             this.ctx.scale(-1, 1);
-            
-            const videoAspect = this.video.videoWidth / this.video.videoHeight;
-            const canvasAspect = displayWidth / displayHeight;
-            
-            let drawWidth, drawHeight, drawX, drawY;
-            if (videoAspect > canvasAspect) {
-                drawWidth = displayWidth;
-                drawHeight = drawWidth / videoAspect;
-                drawX = -displayWidth;
-                drawY = (displayHeight - drawHeight) / 2;
-            } else {
-                drawHeight = displayHeight;
-                drawWidth = drawHeight * videoAspect;
-                drawX = -(displayWidth + (drawWidth - displayWidth) / 2);
-                drawY = 0;
-            }
-            
-            this.ctx.fillStyle = '#000';
-            this.ctx.fillRect(-displayWidth, 0, displayWidth, displayHeight);
-            this.ctx.drawImage(this.video, drawX, drawY, drawWidth, drawHeight);
+            this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
             this.ctx.restore();
             
-            // Get image data at full resolution
             const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
             const data = imageData.data;
-            const width = imageData.width;
-            const height = imageData.height;
             
-            // Create masks with improved edge handling
-            const skinMask = this.createImprovedSkinMask(landmarks, width, height);
-            const eyeMask = this.createEyeMask(landmarks, width, height);
-            const lipMask = this.createLipMask(landmarks, width, height);
-            const eyebrowMask = this.createEyebrowMask(landmarks, width, height);
+            const skinMask = this.createSkinMask(landmarks, this.canvas.width, this.canvas.height);
+            const eyeMask = this.createEyeMask(landmarks, this.canvas.width, this.canvas.height);
+            const lipMask = this.createLipMask(landmarks, this.canvas.width, this.canvas.height);
+            const eyebrowMask = this.createEyebrowMask(landmarks, this.canvas.width, this.canvas.height);
             
-            // Apply UV filter with strict skin-only masking
             for (let i = 0; i < data.length; i += 4) {
-                const x = (i / 4) % width;
-                const y = Math.floor((i / 4) / width);
-                const idx = y * width + x;
+                const x = (i / 4) % this.canvas.width;
+                const y = Math.floor((i / 4) / this.canvas.width);
                 
                 const r = data[i];
                 const g = data[i + 1];
                 const b = data[i + 2];
                 
+                const idx = Math.floor(y) * this.canvas.width + Math.floor(x);
                 const skinValue = skinMask[idx] || 0;
                 const eyeValue = eyeMask[idx] || 0;
                 const lipValue = lipMask[idx] || 0;
                 const eyebrowValue = eyebrowMask[idx] || 0;
                 
-                // STRICT: Only apply UV effect to skin areas
-                // Background, clothes, and non-skin areas remain untouched
-                if (skinValue > 0.01) {
-                    // Skin area - apply UV filter
+                if (eyeValue > 0.1) {
                     const inverted = this.invertPixel(r, g, b);
-                    const uvColor = this.applyEnhancedUVLUT(inverted.r, inverted.g, inverted.b, 'skin', r, g, b);
-                    
-                    // Blend based on mask value with edge feathering
-                    const blend = skinValue;
-                    data[i] = this.lerp(r, uvColor.r, blend);
-                    data[i + 1] = this.lerp(g, uvColor.g, blend);
-                    data[i + 2] = this.lerp(b, uvColor.b, blend);
-                } else if (eyeValue > 0.1) {
-                    // Eyes - bright and clean
-                    const inverted = this.invertPixel(r, g, b);
-                    const uvColor = this.applyEnhancedUVLUT(inverted.r, inverted.g, inverted.b, 'eye', r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'eye');
                     data[i] = uvColor.r;
                     data[i + 1] = uvColor.g;
                     data[i + 2] = uvColor.b;
                 } else if (lipValue > 0.1) {
-                    // Lips - greenish tint
                     const inverted = this.invertPixel(r, g, b);
-                    const uvColor = this.applyEnhancedUVLUT(inverted.r, inverted.g, inverted.b, 'lip', r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'lip');
                     data[i] = uvColor.r;
                     data[i + 1] = uvColor.g;
                     data[i + 2] = uvColor.b;
                 } else if (eyebrowValue > 0.1) {
-                    // Eyebrows - minimal effect, preserve shape
                     const inverted = this.invertPixel(r, g, b);
-                    const uvColor = this.applyEnhancedUVLUT(inverted.r, inverted.g, inverted.b, 'hair', r, g, b);
-                    data[i] = this.lerp(r, uvColor.r, 0.2);
-                    data[i + 1] = this.lerp(g, uvColor.g, 0.2);
-                    data[i + 2] = this.lerp(b, uvColor.b, 0.2);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'hair');
+                    data[i] = this.lerp(r, uvColor.r, 0.3);
+                    data[i + 1] = this.lerp(g, uvColor.g, 0.3);
+                    data[i + 2] = this.lerp(b, uvColor.b, 0.3);
+                } else if (skinValue > 0.1) {
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'skin');
+                    const blend = skinValue;
+                    data[i] = this.lerp(r, uvColor.r, blend);
+                    data[i + 1] = this.lerp(g, uvColor.g, blend);
+                    data[i + 2] = this.lerp(b, uvColor.b, blend);
+                } else {
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'hair');
+                    data[i] = uvColor.r;
+                    data[i + 1] = uvColor.g;
+                    data[i + 2] = uvColor.b;
                 }
-                // Background and non-skin areas remain untouched (no else clause)
             }
             
-            // Apply S-curve contrast (non-linear) to preserve mid-tones
-            this.applySCurveContrast(imageData);
+            this.applyContrast(imageData, 1.8);
+            this.applySoftBlur(imageData, skinMask, 2);
             
-            // Apply edge blur ONLY on mask edges (8-12px adaptive)
-            this.applyEdgeBlur(imageData, skinMask, width, height);
-            
-            // Add subtle depth simulation
-            this.applyDepthSimulation(imageData, landmarks, width, height);
-            
-            // Put processed image back
             this.ctx.putImageData(imageData, 0, 0);
+            // UV filter active
             
             this.frameCount++;
         } catch (error) {
@@ -1388,70 +1244,6 @@ class UVFaceFilter {
                 mask[idx] = value;
                 if (x + 1 < width) mask[idx + 1] = value;
                 if (y + 1 < height) mask[(y + 1) * width + x] = value;
-            }
-        }
-        
-        return mask;
-    }
-    
-    createImprovedSkinMask(landmarks, width, height) {
-        // Create strict skin-only mask with better edge handling
-        const mask = new Float32Array(width * height);
-        const skinPoints = this.skinLandmarks.map(idx => {
-            if (idx < landmarks.length) {
-                const landmark = landmarks[idx];
-                return {
-                    x: landmark.x * width,
-                    y: landmark.y * height
-                };
-            }
-            return null;
-        }).filter(p => p !== null);
-        
-        if (skinPoints.length === 0) return mask;
-        
-        // Get jawline and hairline points for stronger edge blur
-        const jawlineIndices = [172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323];
-        const hairlineIndices = [10, 151, 9, 10, 337, 299, 333, 298, 301];
-        
-        const jawlinePoints = jawlineIndices
-            .filter(idx => idx < landmarks.length)
-            .map(idx => ({
-                x: landmarks[idx].x * width,
-                y: landmarks[idx].y * height
-            }));
-        
-        const hairlinePoints = hairlineIndices
-            .filter(idx => idx < landmarks.length)
-            .map(idx => ({
-                x: landmarks[idx].x * width,
-                y: landmarks[idx].y * height
-            }));
-        
-        // Create mask with adaptive edge blur
-        const step = 1;
-        for (let y = 0; y < height; y += step) {
-            for (let x = 0; x < width; x += step) {
-                const dist = this.distanceToPolygon(x, y, skinPoints);
-                
-                // Check distance to jawline and hairline for stronger blur
-                const jawDist = jawlinePoints.length > 0 ? this.distanceToPolygon(x, y, jawlinePoints) : Infinity;
-                const hairDist = hairlinePoints.length > 0 ? this.distanceToPolygon(x, y, hairlinePoints) : Infinity;
-                const edgeDist = Math.min(jawDist, hairDist);
-                
-                // Adaptive blur radius: stronger near edges (8-12px)
-                let blurRadius = 60;
-                if (edgeDist < 15) {
-                    blurRadius = 12; // Strong blur at jawline/hairline
-                } else if (edgeDist < 25) {
-                    blurRadius = 10;
-                } else if (edgeDist < 35) {
-                    blurRadius = 8;
-                }
-                
-                const value = Math.max(0, 1 - dist / blurRadius);
-                const idx = y * width + x;
-                mask[idx] = value;
             }
         }
         
@@ -1677,176 +1469,6 @@ class UVFaceFilter {
             data[i] = this.clamp(factor * (data[i] - 128) + 128);
             data[i + 1] = this.clamp(factor * (data[i + 1] - 128) + 128);
             data[i + 2] = this.clamp(factor * (data[i + 2] - 128) + 128);
-        }
-    }
-    
-    applySCurveContrast(imageData) {
-        // Non-linear S-curve contrast to preserve mid-tones
-        const data = imageData.data;
-        const strength = 0.3; // Moderate contrast boost
-        
-        for (let i = 0; i < data.length; i += 4) {
-            // Normalize to 0-1
-            let r = data[i] / 255;
-            let g = data[i + 1] / 255;
-            let b = data[i + 2] / 255;
-            
-            // S-curve: enhance shadows and highlights while preserving mid-tones
-            const sCurve = (x) => {
-                if (x < 0.5) {
-                    return x * (1 - strength * (1 - 2 * x));
-                } else {
-                    return x + (1 - x) * strength * (2 * x - 1);
-                }
-            };
-            
-            r = sCurve(r);
-            g = sCurve(g);
-            b = sCurve(b);
-            
-            data[i] = this.clamp(r * 255);
-            data[i + 1] = this.clamp(g * 255);
-            data[i + 2] = this.clamp(b * 255);
-        }
-    }
-    
-    applyEdgeBlur(imageData, mask, width, height) {
-        // Apply Gaussian blur ONLY on mask edges (8-12px adaptive) - optimized for performance
-        const data = imageData.data;
-        const tempData = new Uint8ClampedArray(data);
-        
-        // Only process edge pixels (skip center and far edges for performance)
-        const step = 1; // Process every pixel for quality, but optimize inner loops
-        for (let y = 4; y < height - 4; y += step) {
-            for (let x = 4; x < width - 4; x += step) {
-                const idx = y * width + x;
-                const maskVal = mask[idx] || 0;
-                
-                // Only blur if on edge (mask value between 0.05 and 0.95)
-                if (maskVal > 0.05 && maskVal < 0.95) {
-                    // Adaptive blur radius: 8-12px based on edge distance
-                    const edgeDistance = Math.abs(maskVal - 0.5) * 2; // 0 at edge, 1 at center/far
-                    const blurRadius = Math.floor(8 + (1 - edgeDistance) * 4); // 8-12px
-                    
-                    // Pre-calculate Gaussian weights for performance
-                    let rSum = 0, gSum = 0, bSum = 0, count = 0;
-                    const sigma = blurRadius / 3; // Gaussian sigma
-                    const twoSigmaSq = 2 * sigma * sigma;
-                    
-                    // Sample in a square grid, but use Gaussian weighting
-                    const sampleStep = Math.max(1, Math.floor(blurRadius / 4)); // Adaptive sampling
-                    for (let dy = -blurRadius; dy <= blurRadius; dy += sampleStep) {
-                        for (let dx = -blurRadius; dx <= blurRadius; dx += sampleStep) {
-                            const dist = Math.sqrt(dx * dx + dy * dy);
-                            if (dist <= blurRadius) {
-                                const nIdx = ((y + dy) * width + (x + dx)) * 4;
-                                const weight = Math.exp(-(dist * dist) / twoSigmaSq); // Gaussian
-                                rSum += tempData[nIdx] * weight;
-                                gSum += tempData[nIdx + 1] * weight;
-                                bSum += tempData[nIdx + 2] * weight;
-                                count += weight;
-                            }
-                        }
-                    }
-                    
-                    if (count > 0) {
-                        const blend = (1 - edgeDistance) * 0.7; // Stronger blur at exact edges
-                        const idx4 = idx * 4;
-                        data[idx4] = this.lerp(data[idx4], rSum / count, blend);
-                        data[idx4 + 1] = this.lerp(data[idx4 + 1], gSum / count, blend);
-                        data[idx4 + 2] = this.lerp(data[idx4 + 2], bSum / count, blend);
-                    }
-                }
-            }
-        }
-    }
-    
-    applyDepthSimulation(imageData, landmarks, width, height) {
-        // Add fake depth shading for cinematic look
-        const data = imageData.data;
-        
-        // Get face center and key points for depth calculation
-        if (landmarks.length < 10) return;
-        
-        const noseTip = landmarks[4]; // Nose tip
-        const leftCheek = landmarks[234];
-        const rightCheek = landmarks[454];
-        const forehead = landmarks[10];
-        
-        const noseX = noseTip.x * width;
-        const noseY = noseTip.y * height;
-        
-        for (let i = 0; i < data.length; i += 4) {
-            const x = (i / 4) % width;
-            const y = Math.floor((i / 4) / width);
-            
-            // Calculate distance from nose (center of face)
-            const dx = x - noseX;
-            const dy = y - noseY;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const maxDist = Math.min(width, height) * 0.4;
-            const normalizedDist = Math.min(1, dist / maxDist);
-            
-            // Nose bridge slightly brighter
-            const noseDist = Math.sqrt((x - noseX) * (x - noseX) + (y - (noseY - 30)) * (y - (noseY - 30)));
-            const isNoseBridge = noseDist < 20;
-            
-            // Subtle brightness adjustment based on depth
-            let brightnessAdjust = 1.0;
-            if (isNoseBridge) {
-                brightnessAdjust = 1.08; // Slightly brighter
-            } else {
-                brightnessAdjust = 1.0 - normalizedDist * 0.05; // Slightly darker at edges
-            }
-            
-            // Very subtle vignette
-            const centerX = width / 2;
-            const centerY = height / 2;
-            const vDist = Math.sqrt((x - centerX) * (x - centerX) + (y - centerY) * (y - centerY));
-            const vMaxDist = Math.sqrt(centerX * centerX + centerY * centerY);
-            const vignette = 1.0 - (vDist / vMaxDist) * 0.03; // Very subtle
-            
-            const finalAdjust = brightnessAdjust * vignette;
-            
-            data[i] = this.clamp(data[i] * finalAdjust);
-            data[i + 1] = this.clamp(data[i + 1] * finalAdjust);
-            data[i + 2] = this.clamp(data[i + 2] * finalAdjust);
-        }
-    }
-    
-    applyNoiseReduction(imageData) {
-        // Light noise reduction using a small blur kernel
-        // Only process every other pixel for better performance and less blur
-        const data = imageData.data;
-        const width = imageData.width;
-        const height = imageData.height;
-        const tempData = new Uint8ClampedArray(data);
-        
-        // Apply a 3x3 Gaussian-like blur for noise reduction
-        // Process every 2 pixels for better performance
-        const radius = 1;
-        const step = 2; // Process every other pixel
-        for (let y = radius; y < height - radius; y += step) {
-            for (let x = radius; x < width - radius; x += step) {
-                let rSum = 0, gSum = 0, bSum = 0, count = 0;
-                
-                for (let dy = -radius; dy <= radius; dy++) {
-                    for (let dx = -radius; dx <= radius; dx++) {
-                        const idx = ((y + dy) * width + (x + dx)) * 4;
-                        const weight = (dx === 0 && dy === 0) ? 5 : 1; // Center pixel has more weight
-                        rSum += tempData[idx] * weight;
-                        gSum += tempData[idx + 1] * weight;
-                        bSum += tempData[idx + 2] * weight;
-                        count += weight;
-                    }
-                }
-                
-                const idx = (y * width + x) * 4;
-                // Blend 60% smoothed, 40% original for lighter noise reduction (less blur)
-                data[idx] = data[idx] * 0.4 + (rSum / count) * 0.6;
-                data[idx + 1] = data[idx + 1] * 0.4 + (gSum / count) * 0.6;
-                data[idx + 2] = data[idx + 2] * 0.4 + (bSum / count) * 0.6;
-            }
         }
     }
     
