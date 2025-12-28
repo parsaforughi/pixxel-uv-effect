@@ -65,7 +65,8 @@ class UVFaceFilter {
             return;
         }
         
-        this.ctx = this.canvas.getContext('2d');
+        // Use willReadFrequently for better performance with frequent getImageData calls
+        this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
         deepLog('CONSTRUCTOR', 'Canvas context', { context: !!this.ctx });
         
         this.faceMesh = null;
