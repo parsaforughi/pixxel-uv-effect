@@ -208,8 +208,8 @@ class UVFaceFilter {
                 // Draw text logo as fallback
                 const text = 'UV';
                 const fontSize = isMobile ? 28 : 32;
-                const x = this.canvas.width - padding;
-                const y = this.canvas.height - padding;
+                const x = displayWidth - padding;
+                const y = displayHeight - padding;
                 
                 // Draw text with shadow for visibility
                 this.ctx.font = `bold ${fontSize}px Arial`;
@@ -840,19 +840,37 @@ class UVFaceFilter {
             this.ctx.imageSmoothingEnabled = true;
             this.ctx.imageSmoothingQuality = 'high';
             
-            // Get display dimensions (accounting for device pixel ratio scaling)
-            const devicePixelRatio = window.devicePixelRatio || 1;
-            const displayWidth = this.canvas.width / devicePixelRatio;
-            const displayHeight = this.canvas.height / devicePixelRatio;
+            // Use viewport dimensions
+            const displayWidth = window.innerWidth;
+            const displayHeight = window.innerHeight;
             
-            // Clear canvas using display dimensions
+            // Clear canvas using viewport dimensions
             this.ctx.fillStyle = '#000';
             this.ctx.fillRect(0, 0, displayWidth, displayHeight);
             
-            // Draw video frame (mirrored) at full resolution
+            // Draw video frame (mirrored) at full resolution, covering entire viewport
             this.ctx.save();
             this.ctx.scale(-1, 1);
-            this.ctx.drawImage(this.video, -displayWidth, 0, displayWidth, displayHeight);
+            // Draw video to fill entire canvas, maintaining aspect ratio
+            const videoAspect = this.video.videoWidth / this.video.videoHeight;
+            const canvasAspect = displayWidth / displayHeight;
+            
+            let drawWidth, drawHeight, drawX, drawY;
+            if (videoAspect > canvasAspect) {
+                // Video is wider - fit to height
+                drawHeight = displayHeight;
+                drawWidth = drawHeight * videoAspect;
+                drawX = -(displayWidth + (drawWidth - displayWidth) / 2);
+                drawY = 0;
+            } else {
+                // Video is taller - fit to width
+                drawWidth = displayWidth;
+                drawHeight = drawWidth / videoAspect;
+                drawX = -displayWidth;
+                drawY = (displayHeight - drawHeight) / 2;
+            }
+            
+            this.ctx.drawImage(this.video, drawX, drawY, drawWidth, drawHeight);
             this.ctx.restore();
             
             // Get image data for processing at full internal resolution
