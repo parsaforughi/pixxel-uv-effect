@@ -912,7 +912,7 @@ class UVFaceFilter {
                     
                     // Check if pixel is in person mask
                     let isPerson = false;
-                    if (personMaskData) {
+                    if (personMaskData && personMaskData.data) {
                         // Scale mask coordinates to image coordinates
                         const maskX = Math.floor((x / width) * personMaskData.width);
                         const maskY = Math.floor((y / height) * personMaskData.height);
@@ -921,7 +921,7 @@ class UVFaceFilter {
                         const maskValue = personMaskData.data[maskIdx]; // R channel (grayscale)
                         isPerson = maskValue > 128; // Threshold for person detection
                     } else {
-                        // If no segmentation, treat everything as person (fallback)
+                        // If no segmentation mask available, apply UV to everything (fallback)
                         isPerson = true;
                     }
                     
