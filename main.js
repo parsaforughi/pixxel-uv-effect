@@ -880,37 +880,97 @@ class UVFaceFilter {
             const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
             const data = imageData.data;
             
-            // Apply UV filter to every pixel - simple color inversion
-            for (let i = 0; i < data.length; i += 4) {
-                const r = data[i];
-                const g = data[i + 1];
-                const b = data[i + 2];
-                
-                // Detect sunscreen - very bright/white areas (sunscreen is usually white/light cream)
-                // Sunscreen blocks UV light, so it appears black in UV view
-                const brightness = (r + g + b) / 3;
-                // Check for white/light cream color (high brightness, low saturation)
-                const maxChannel = Math.max(r, g, b);
-                const minChannel = Math.min(r, g, b);
-                const saturation = maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
-                const isSunscreen = brightness > 180 && saturation < 0.3; // Bright and low saturation = sunscreen
-                
-                if (isSunscreen) {
-                    // Sunscreen blocks UV - appears black in UV view
-                    data[i] = 0;     // R
-                    data[i + 1] = 0; // G
-                    data[i + 2] = 0; // B
-                    continue;
+            // Get segmentation mask if available
+            let personMaskData = null;
+            if (this.lastSegmentationMask) {
+                try {
+                    // Extract mask data from MediaPipe segmentation mask
+                    const maskCanvas = document.createElement('canvas');
+                    maskCanvas.width = this.lastSegmentationMask.width || this.canvas.width;
+                    maskCanvas.height = this.lastSegmentationMask.height || this.canvas.height;
+                    const maskCtx = maskCanvas.getContext('2d');
+                    maskCtx.drawImage(this.lastSegmentationMask, 0, 0, maskCanvas.width, maskCanvas.height);
+                    personMaskData = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
+                } catch (error) {
+                    deepLog('RENDER', 'ERROR extracting segmentation mask', {
+                        name: error.name,
+                        message: error.message
+                    });
                 }
-                
-                // Pure color inversion - classic UV camera effect
-                // No additional processing, just invert RGB values
-                data[i] = 255 - r;     // Invert red
-                data[i + 1] = 255 - g; // Invert green
-                data[i + 2] = 255 - b; // Invert blue
             }
             
-            // No contrast adjustment - pure inversion only
+            const width = imageData.width;
+            const height = imageData.height;
+            
+            // Process each pixel
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const i = (y * width + x) * 4;
+                    const r = data[i];
+                    const g = data[i + 1];
+                    const b = data[i + 2];
+                    
+                    // Check if pixel is in person mask
+                    let isPerson = false;
+                    if (personMaskData) {
+                        // Scale mask coordinates to image coordinates
+                        const maskX = Math.floor((x / width) * personMaskData.width);
+                        const maskY = Math.floor((y / height) * personMaskData.height);
+                        const maskIdx = (maskY * personMaskData.width + maskX) * 4;
+                        // MediaPipe segmentation mask uses grayscale - check any channel
+                        const maskValue = personMaskData.data[maskIdx]; // R channel (grayscale)
+                        isPerson = maskValue > 128; // Threshold for person detection
+                    } else {
+                        // If no segmentation, treat everything as person (fallback)
+                        isPerson = true;
+                    }
+                    
+                    // BACKGROUND PROCESSING - Keep dark and untouched
+                    if (!isPerson) {
+                        const brightness = (r + g + b) / 3;
+                        const maxChannel = Math.max(r, g, b);
+                        const minChannel = Math.min(r, g, b);
+                        const saturation = maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
+                        
+                        // Shadow suppression - very dark, low saturation areas
+                        if (brightness < 80 && saturation < 0.2) {
+                            // Pure background shadow - make it very dark
+                            data[i] = Math.max(0, brightness * 0.3);     // R
+                            data[i + 1] = Math.max(0, brightness * 0.3); // G
+                            data[i + 2] = Math.max(0, brightness * 0.3); // B
+                        } else {
+                            // Regular background - darken and desaturate
+                            const darkenFactor = 0.4;
+                            const gray = brightness * darkenFactor;
+                            data[i] = gray;     // R
+                            data[i + 1] = gray;  // G
+                            data[i + 2] = gray;  // B
+                        }
+                        continue;
+                    }
+                    
+                    // PERSON/SKIN PROCESSING - Apply UV filter
+                    // Detect sunscreen
+                    const brightness = (r + g + b) / 3;
+                    const maxChannel = Math.max(r, g, b);
+                    const minChannel = Math.min(r, g, b);
+                    const saturation = maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
+                    const isSunscreen = brightness > 180 && saturation < 0.3;
+                    
+                    if (isSunscreen) {
+                        // Sunscreen blocks UV - appears black
+                        data[i] = 0;
+                        data[i + 1] = 0;
+                        data[i + 2] = 0;
+                        continue;
+                    }
+                    
+                    // Pure color inversion for person/skin
+                    data[i] = 255 - r;
+                    data[i + 1] = 255 - g;
+                    data[i + 2] = 255 - b;
+                }
+            }
             
             // Put processed image back
             this.ctx.putImageData(imageData, 0, 0);
