@@ -1206,35 +1206,83 @@ class UVFaceFilter {
             
             // STEP 2: Face landmarks already detected (passed as parameter)
             
-            // STEP 3: Build STRICT binary skin-only mask (exclude everything else)
+            // STEP 3: Create person segmentation (person mask + background mask)
+            const personMask = this.createPersonMask(landmarks, width, height);
+            const backgroundMask = this.createBackgroundMask(personMask, width, height);
+            
+            // STEP 4: Build STRICT binary skin-only mask (exclude everything else)
             const binarySkinMask = this.createStrictBinarySkinMask(landmarks, width, height);
             const eyeMask = this.createEyeMask(landmarks, width, height);
             const lipMask = this.createLipMask(landmarks, width, height);
             
-            // STEP 4: Apply adaptive edge feather ONLY to the mask
+            // STEP 5: Apply adaptive edge feather ONLY to the face skin mask
             const featheredMask = this.applyFeatherToMask(binarySkinMask, landmarks, width, height);
             
-            // STEP 5: Process colors ONLY inside the skin mask
-            const processedSkinData = new Uint8ClampedArray(originalData.length);
-            
+            // STEP 6: Process BACKGROUND FIRST - clamp to dark, no UV processing
+            const processedBackgroundData = new Uint8ClampedArray(originalData.length);
             for (let i = 0; i < originalData.length; i += 4) {
+                const x = (i / 4) % width;
+                const y = Math.floor((i / 4) / width);
+                const idx = y * width + x;
+                const bgMaskValue = backgroundMask[idx] || 0;
+                
+                if (bgMaskValue > 0.5) {
+                    // Background pixel - apply clamping
+                    const r = originalData[i];
+                    const g = originalData[i + 1];
+                    const b = originalData[i + 2];
+                    
+                    // Calculate luminance and saturation
+                    const luminance = (r + g + b) / 3;
+                    const maxChannel = Math.max(r, g, b);
+                    const minChannel = Math.min(r, g, b);
+                    const saturation = maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
+                    
+                    // Shadow suppression: dark, low-saturation pixels → pure dark background
+                    if (luminance < 60 && saturation < 0.3) {
+                        // Hard clamp to dark
+                        processedBackgroundData[i] = Math.max(0, luminance * 0.3);
+                        processedBackgroundData[i + 1] = Math.max(0, luminance * 0.3);
+                        processedBackgroundData[i + 2] = Math.max(0, luminance * 0.3);
+                    } else {
+                        // Slightly darken and desaturate background
+                        const darkened = luminance * 0.85; // Slightly darken
+                        const desaturated = this.lerp(luminance, maxChannel, saturation * 0.3); // Low saturation
+                        processedBackgroundData[i] = this.clamp(darkened);
+                        processedBackgroundData[i + 1] = this.clamp(darkened);
+                        processedBackgroundData[i + 2] = this.clamp(darkened);
+                    }
+                    processedBackgroundData[i + 3] = originalData[i + 3];
+                } else {
+                    // Not background - will be processed later
+                    processedBackgroundData[i] = originalData[i];
+                    processedBackgroundData[i + 1] = originalData[i + 1];
+                    processedBackgroundData[i + 2] = originalData[i + 2];
+                    processedBackgroundData[i + 3] = originalData[i + 3];
+                }
+            }
+            
+            // STEP 7: Process colors ONLY inside the face skin mask (UV processing)
+            const processedSkinData = new Uint8ClampedArray(processedBackgroundData);
+            
+            for (let i = 0; i < processedBackgroundData.length; i += 4) {
                 const x = (i / 4) % width;
                 const y = Math.floor((i / 4) / width);
                 const idx = y * width + x;
                 const maskValue = featheredMask[idx] || 0;
                 
                 if (maskValue > 0) {
-                    // Inside mask - process colors
-                    const r = originalData[i];
+                    // Inside face skin mask - process UV colors
+                    const r = originalData[i]; // Use original, not background-processed
                     const g = originalData[i + 1];
                     const b = originalData[i + 2];
                     
-                    // 5a) Invert colors (masked region only)
+                    // 7a) Invert colors (masked region only)
                     let invertedR = 255 - r;
                     let invertedG = 255 - g;
                     let invertedB = 255 - b;
                     
-                    // 5b) Apply UV LUT-style remapping
+                    // 7b) Apply UV LUT-style remapping
                     const eyeValue = eyeMask[idx] || 0;
                     const lipValue = lipMask[idx] || 0;
                     
@@ -1251,24 +1299,18 @@ class UVFaceFilter {
                     processedSkinData[i + 1] = uvColor.g;
                     processedSkinData[i + 2] = uvColor.b;
                     processedSkinData[i + 3] = originalData[i + 3];
-                } else {
-                    // Outside mask - keep original
-                    processedSkinData[i] = originalData[i];
-                    processedSkinData[i + 1] = originalData[i + 1];
-                    processedSkinData[i + 2] = originalData[i + 2];
-                    processedSkinData[i + 3] = originalData[i + 3];
                 }
             }
             
             // Create temporary ImageData for S-curve processing
             const tempImageData = new ImageData(processedSkinData, width, height);
             
-            // 5c) Apply non-linear S-curve contrast (only to processed skin)
+            // 7c) Apply non-linear S-curve contrast (only to processed skin)
             this.applySCurveContrastToMask(tempImageData, featheredMask);
             
-            // 5d) Preserve mid-tones (already handled in S-curve)
+            // 7d) Preserve mid-tones (already handled in S-curve)
             
-            // STEP 6: Temporal smoothing - blend CURRENT processed skin with PREVIOUS frame
+            // STEP 8: Temporal smoothing - blend CURRENT processed skin with PREVIOUS frame
             if (this.lastProcessedSkin) {
                 for (let i = 0; i < processedSkinData.length; i += 4) {
                     const x = (i / 4) % width;
@@ -1291,22 +1333,29 @@ class UVFaceFilter {
             // Store current processed skin for next frame
             this.lastProcessedSkin = new Uint8ClampedArray(processedSkinData);
             
-            // STEP 7: Composite processed skin BACK onto original frame
+            // STEP 9: Composite processed face skin over processed background
             const finalImageData = new ImageData(width, height);
             for (let i = 0; i < originalData.length; i += 4) {
                 const x = (i / 4) % width;
                 const y = Math.floor((i / 4) / width);
                 const idx = y * width + x;
                 const maskValue = featheredMask[idx] || 0;
+                const bgMaskValue = backgroundMask[idx] || 0;
                 
                 if (maskValue > 0) {
-                    // Use processed skin with mask blend
-                    finalImageData.data[i] = this.lerp(originalData[i], processedSkinData[i], maskValue);
-                    finalImageData.data[i + 1] = this.lerp(originalData[i + 1], processedSkinData[i + 1], maskValue);
-                    finalImageData.data[i + 2] = this.lerp(originalData[i + 2], processedSkinData[i + 2], maskValue);
+                    // Face skin - use processed UV colors with mask blend
+                    finalImageData.data[i] = this.lerp(processedBackgroundData[i], processedSkinData[i], maskValue);
+                    finalImageData.data[i + 1] = this.lerp(processedBackgroundData[i + 1], processedSkinData[i + 1], maskValue);
+                    finalImageData.data[i + 2] = this.lerp(processedBackgroundData[i + 2], processedSkinData[i + 2], maskValue);
+                    finalImageData.data[i + 3] = originalData[i + 3];
+                } else if (bgMaskValue > 0.5) {
+                    // Background - use clamped dark background
+                    finalImageData.data[i] = processedBackgroundData[i];
+                    finalImageData.data[i + 1] = processedBackgroundData[i + 1];
+                    finalImageData.data[i + 2] = processedBackgroundData[i + 2];
                     finalImageData.data[i + 3] = originalData[i + 3];
                 } else {
-                    // Background untouched
+                    // Person but not face skin (clothes, etc.) - keep original
                     finalImageData.data[i] = originalData[i];
                     finalImageData.data[i + 1] = originalData[i + 1];
                     finalImageData.data[i + 2] = originalData[i + 2];
@@ -1314,10 +1363,10 @@ class UVFaceFilter {
                 }
             }
             
-            // STEP 8: Apply very subtle global softness (AFTER compositing)
+            // STEP 10: Apply very subtle global softness (AFTER compositing)
             this.applySubtleGlobalSoftness(finalImageData, eyeMask, lipMask);
             
-            // STEP 9: Apply very subtle vignette (opacity < 6%)
+            // STEP 11: Apply very subtle vignette (opacity < 6%)
             this.applySubtleVignette(finalImageData);
             
             // Put final image back
@@ -1362,6 +1411,73 @@ class UVFaceFilter {
                 if (x + 1 < width) mask[idx + 1] = value;
                 if (y + 1 < height) mask[(y + 1) * width + x] = value;
             }
+        }
+        
+        return mask;
+    }
+    
+    // Create person mask (face + body/clothes, excludes background)
+    createPersonMask(landmarks, width, height) {
+        const mask = new Float32Array(width * height);
+        
+        // Get face outline points (jawline, cheeks, forehead)
+        const faceOutlineIndices = [
+            // Jawline
+            172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323,
+            // Cheeks
+            234, 454, 227, 447,
+            // Forehead
+            10, 151, 9
+        ];
+        
+        const faceOutlinePoints = faceOutlineIndices
+            .filter(idx => idx < landmarks.length)
+            .map(idx => ({
+                x: landmarks[idx].x * width,
+                y: landmarks[idx].y * height
+            }));
+        
+        if (faceOutlinePoints.length === 0) return mask;
+        
+        // Find bounding box of face
+        const faceMinX = Math.min(...faceOutlinePoints.map(p => p.x));
+        const faceMaxX = Math.max(...faceOutlinePoints.map(p => p.x));
+        const faceMinY = Math.min(...faceOutlinePoints.map(p => p.y));
+        const faceMaxY = Math.max(...faceOutlinePoints.map(p => p.y));
+        
+        // Extend downward to include body/clothes (estimate person area)
+        const personMinX = Math.max(0, faceMinX - (faceMaxX - faceMinX) * 0.3);
+        const personMaxX = Math.min(width, faceMaxX + (faceMaxX - faceMinX) * 0.3);
+        const personMinY = faceMinY;
+        const personMaxY = Math.min(height, faceMaxY + (faceMaxY - faceMinY) * 2.5); // Extend down for body
+        
+        // Create person mask (face + estimated body area)
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const idx = y * width + x;
+                
+                // Check if inside face outline
+                const insideFace = this.isPointInPolygon(x, y, faceOutlinePoints);
+                
+                // Check if in estimated body area (below face)
+                const inBodyArea = (x >= personMinX && x <= personMaxX && 
+                                   y >= faceMaxY && y <= personMaxY);
+                
+                // Person mask: face OR body area
+                mask[idx] = (insideFace || inBodyArea) ? 1.0 : 0.0;
+            }
+        }
+        
+        return mask;
+    }
+    
+    // Create background mask (inverse of person mask)
+    createBackgroundMask(personMask, width, height) {
+        const mask = new Float32Array(width * height);
+        
+        for (let i = 0; i < personMask.length; i++) {
+            // Background = NOT person
+            mask[i] = personMask[i] > 0.5 ? 0.0 : 1.0;
         }
         
         return mask;
