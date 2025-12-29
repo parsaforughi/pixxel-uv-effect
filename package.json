@@ -4,11 +4,14 @@
   "description": "TikTok-style UV face filter web app",
   "type": "module",
   "scripts": {
-    "dev": "npx serve -p 8000",
-    "start": "npx serve -p 8000"
+    "dev": "serve -p 8000",
+    "start": "serve -p 8000"
   },
   "keywords": ["face-filter", "uv-filter", "camera", "web"],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "serve": "^14.2.1"
+  }
 }
 
