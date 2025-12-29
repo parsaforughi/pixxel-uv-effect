@@ -86,16 +86,6 @@ class UVFaceFilter {
         this.lastLandmarks = null; // Store last detected landmarks for continuous rendering
         this.faceMeshSetupAttempted = false; // Prevent multiple FaceMesh setups
         
-        // Temporal smoothing for face tracking stability (EMA)
-        this.landmarkHistory = []; // Store last 5 frames of landmarks
-        this.maxHistoryFrames = 5;
-        this.smoothingAlpha = 0.75; // EMA factor (higher = more smoothing, more stable)
-        this.emaLandmarks = null; // Exponential moving average state
-        
-        // Temporal color stability (70% previous, 30% current) - ONLY for processed skin
-        this.lastProcessedSkin = null; // Store previous frame's processed skin colors
-        this.colorSmoothingAlpha = 0.7; // 70% previous frame, 30% current frame
-        
         // Face mesh landmarks
         this.skinLandmarks = this.getSkinLandmarks();
         this.eyeLandmarks = this.getEyeLandmarks();
@@ -838,22 +828,11 @@ class UVFaceFilter {
                     continue;
                 }
                 
-                // Invert colors first
-                const invertedR = 255 - r;
-                const invertedG = 255 - g;
-                const invertedB = 255 - b;
-                
-                // Filter to only green and blue tones - remove red spectrum
-                // Keep green and blue channels, reduce/remove red
-                const greenBlueOnly = {
-                    r: Math.min(255, invertedG * 0.3),      // Minimal red from green
-                    g: Math.min(255, invertedG * 1.0),      // Full green
-                    b: Math.min(255, invertedB * 1.0)       // Full blue
-                };
-                
-                data[i] = greenBlueOnly.r;
-                data[i + 1] = greenBlueOnly.g;
-                data[i + 2] = greenBlueOnly.b;
+                // Pure color inversion - classic UV camera effect
+                // No additional processing, just invert RGB values
+                data[i] = 255 - r;     // Invert red
+                data[i + 1] = 255 - g; // Invert green
+                data[i + 2] = 255 - b; // Invert blue
             }
             
             // No contrast adjustment - pure inversion only
@@ -1038,45 +1017,6 @@ class UVFaceFilter {
         }
     }
     
-    // Temporal smoothing using Exponential Moving Average (EMA) for stable face tracking
-    smoothLandmarks(newLandmarks) {
-        if (!newLandmarks || newLandmarks.length === 0) {
-            return this.lastLandmarks || this.emaLandmarks; // Return last known if no new data
-        }
-        
-        // Initialize EMA state if first frame
-        if (!this.emaLandmarks) {
-            this.emaLandmarks = newLandmarks.map(l => ({ ...l }));
-            return this.emaLandmarks;
-        }
-        
-        // Apply EMA: smoothed = alpha * previous + (1 - alpha) * current
-        // Higher alpha = more smoothing (more stable, less responsive)
-        const alpha = this.smoothingAlpha;
-        const smoothed = [];
-        
-        for (let i = 0; i < newLandmarks.length; i++) {
-            smoothed.push({
-                x: alpha * this.emaLandmarks[i].x + (1 - alpha) * newLandmarks[i].x,
-                y: alpha * this.emaLandmarks[i].y + (1 - alpha) * newLandmarks[i].y,
-                z: (this.emaLandmarks[i].z !== undefined && newLandmarks[i].z !== undefined) 
-                    ? alpha * this.emaLandmarks[i].z + (1 - alpha) * newLandmarks[i].z
-                    : newLandmarks[i].z
-            });
-        }
-        
-        // Update EMA state
-        this.emaLandmarks = smoothed;
-        
-        // Also maintain history for additional stability
-        this.landmarkHistory.push(smoothed);
-        if (this.landmarkHistory.length > this.maxHistoryFrames) {
-            this.landmarkHistory.shift();
-        }
-        
-        return smoothed;
-    }
-    
     processFrame(results) {
         try {
             if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
@@ -1100,16 +1040,13 @@ class UVFaceFilter {
             // Disable fallback to apply UV filter
             this.fallbackActive = false;
             
-            const rawLandmarks = results.multiFaceLandmarks[0];
+            const landmarks = results.multiFaceLandmarks[0];
             
-            // Apply temporal smoothing for stable face lock
-            const smoothedLandmarks = this.smoothLandmarks(rawLandmarks);
+            // Store landmarks for continuous rendering
+            this.lastLandmarks = landmarks;
             
-            // Store smoothed landmarks for continuous rendering
-            this.lastLandmarks = smoothedLandmarks;
-            
-            // Apply UV filter immediately with smoothed landmarks
-            this.applyUVFilter(smoothedLandmarks);
+            // Apply UV filter immediately
+            this.applyUVFilter(landmarks);
             
             // Start continuous UV filter render loop if not already running
             if (!this.renderLoopActive) {
@@ -1187,193 +1124,90 @@ class UVFaceFilter {
     applyUVFilter(landmarks) {
         try {
             if (!this.ctx || !this.video || this.video.readyState < this.video.HAVE_CURRENT_DATA) {
+                deepLog('RENDER', 'Cannot apply UV filter - video not ready', {
+                    hasCtx: !!this.ctx,
+                    hasVideo: !!this.video,
+                    readyState: this.video?.readyState
+                });
                 return;
             }
             
-            const width = this.canvas.width;
-            const height = this.canvas.height;
+            deepLog('RENDER', 'Applying UV filter', {
+                landmarksCount: landmarks.length,
+                canvasSize: `${this.canvas.width}x${this.canvas.height}`,
+                videoSize: `${this.video.videoWidth}x${this.video.videoHeight}`
+            });
             
-            // STEP 1: Capture raw camera frame (NO invert yet)
+            // Clear canvas first
             this.ctx.fillStyle = '#000';
-            this.ctx.fillRect(0, 0, width, height);
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+            
             this.ctx.save();
             this.ctx.scale(-1, 1);
-            this.ctx.drawImage(this.video, -width, 0, width, height);
+            this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
             this.ctx.restore();
             
-            const originalImageData = this.ctx.getImageData(0, 0, width, height);
-            const originalData = new Uint8ClampedArray(originalImageData.data);
+            const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+            const data = imageData.data;
             
-            // STEP 2: Face landmarks already detected (passed as parameter)
+            const skinMask = this.createSkinMask(landmarks, this.canvas.width, this.canvas.height);
+            const eyeMask = this.createEyeMask(landmarks, this.canvas.width, this.canvas.height);
+            const lipMask = this.createLipMask(landmarks, this.canvas.width, this.canvas.height);
+            const eyebrowMask = this.createEyebrowMask(landmarks, this.canvas.width, this.canvas.height);
             
-            // STEP 3: Create person segmentation (person mask + background mask)
-            const personMask = this.createPersonMask(landmarks, width, height);
-            const backgroundMask = this.createBackgroundMask(personMask, width, height);
-            
-            // STEP 4: Build STRICT binary skin-only mask (exclude everything else)
-            const binarySkinMask = this.createStrictBinarySkinMask(landmarks, width, height);
-            const eyeMask = this.createEyeMask(landmarks, width, height);
-            const lipMask = this.createLipMask(landmarks, width, height);
-            
-            // STEP 5: Apply adaptive edge feather ONLY to the face skin mask
-            const featheredMask = this.applyFeatherToMask(binarySkinMask, landmarks, width, height);
-            
-            // STEP 6: Process BACKGROUND FIRST - clamp to dark, no UV processing
-            const processedBackgroundData = new Uint8ClampedArray(originalData.length);
-            for (let i = 0; i < originalData.length; i += 4) {
-                const x = (i / 4) % width;
-                const y = Math.floor((i / 4) / width);
-                const idx = y * width + x;
-                const bgMaskValue = backgroundMask[idx] || 0;
+            for (let i = 0; i < data.length; i += 4) {
+                const x = (i / 4) % this.canvas.width;
+                const y = Math.floor((i / 4) / this.canvas.width);
                 
-                if (bgMaskValue > 0.5) {
-                    // Background pixel - apply clamping
-                    const r = originalData[i];
-                    const g = originalData[i + 1];
-                    const b = originalData[i + 2];
-                    
-                    // Calculate luminance and saturation
-                    const luminance = (r + g + b) / 3;
-                    const maxChannel = Math.max(r, g, b);
-                    const minChannel = Math.min(r, g, b);
-                    const saturation = maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
-                    
-                    // Shadow suppression: dark, low-saturation pixels → pure dark background
-                    if (luminance < 60 && saturation < 0.3) {
-                        // Hard clamp to dark
-                        processedBackgroundData[i] = Math.max(0, luminance * 0.3);
-                        processedBackgroundData[i + 1] = Math.max(0, luminance * 0.3);
-                        processedBackgroundData[i + 2] = Math.max(0, luminance * 0.3);
-                    } else {
-                        // Slightly darken and desaturate background
-                        const darkened = luminance * 0.85; // Slightly darken
-                        const desaturated = this.lerp(luminance, maxChannel, saturation * 0.3); // Low saturation
-                        processedBackgroundData[i] = this.clamp(darkened);
-                        processedBackgroundData[i + 1] = this.clamp(darkened);
-                        processedBackgroundData[i + 2] = this.clamp(darkened);
-                    }
-                    processedBackgroundData[i + 3] = originalData[i + 3];
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+                
+                const idx = Math.floor(y) * this.canvas.width + Math.floor(x);
+                const skinValue = skinMask[idx] || 0;
+                const eyeValue = eyeMask[idx] || 0;
+                const lipValue = lipMask[idx] || 0;
+                const eyebrowValue = eyebrowMask[idx] || 0;
+                
+                if (eyeValue > 0.1) {
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'eye');
+                    data[i] = uvColor.r;
+                    data[i + 1] = uvColor.g;
+                    data[i + 2] = uvColor.b;
+                } else if (lipValue > 0.1) {
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'lip');
+                    data[i] = uvColor.r;
+                    data[i + 1] = uvColor.g;
+                    data[i + 2] = uvColor.b;
+                } else if (eyebrowValue > 0.1) {
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'hair');
+                    data[i] = this.lerp(r, uvColor.r, 0.3);
+                    data[i + 1] = this.lerp(g, uvColor.g, 0.3);
+                    data[i + 2] = this.lerp(b, uvColor.b, 0.3);
+                } else if (skinValue > 0.1) {
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'skin');
+                    const blend = skinValue;
+                    data[i] = this.lerp(r, uvColor.r, blend);
+                    data[i + 1] = this.lerp(g, uvColor.g, blend);
+                    data[i + 2] = this.lerp(b, uvColor.b, blend);
                 } else {
-                    // Not background - will be processed later
-                    processedBackgroundData[i] = originalData[i];
-                    processedBackgroundData[i + 1] = originalData[i + 1];
-                    processedBackgroundData[i + 2] = originalData[i + 2];
-                    processedBackgroundData[i + 3] = originalData[i + 3];
+                    const inverted = this.invertPixel(r, g, b);
+                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'hair');
+                    data[i] = uvColor.r;
+                    data[i + 1] = uvColor.g;
+                    data[i + 2] = uvColor.b;
                 }
             }
             
-            // STEP 7: Process colors ONLY inside the face skin mask (UV processing)
-            const processedSkinData = new Uint8ClampedArray(processedBackgroundData);
+            this.applyContrast(imageData, 1.8);
+            this.applySoftBlur(imageData, skinMask, 2);
             
-            for (let i = 0; i < processedBackgroundData.length; i += 4) {
-                const x = (i / 4) % width;
-                const y = Math.floor((i / 4) / width);
-                const idx = y * width + x;
-                const maskValue = featheredMask[idx] || 0;
-                
-                if (maskValue > 0) {
-                    // Inside face skin mask - process UV colors
-                    const r = originalData[i]; // Use original, not background-processed
-                    const g = originalData[i + 1];
-                    const b = originalData[i + 2];
-                    
-                    // 7a) Invert colors (masked region only)
-                    let invertedR = 255 - r;
-                    let invertedG = 255 - g;
-                    let invertedB = 255 - b;
-                    
-                    // 7b) Apply UV LUT-style remapping
-                    const eyeValue = eyeMask[idx] || 0;
-                    const lipValue = lipMask[idx] || 0;
-                    
-                    let uvColor;
-                    if (eyeValue > 0.1) {
-                        uvColor = this.applyUVLUT(invertedR, invertedG, invertedB, 'eye');
-                    } else if (lipValue > 0.1) {
-                        uvColor = this.applyUVLUT(invertedR, invertedG, invertedB, 'lip');
-                    } else {
-                        uvColor = this.applyUVLUT(invertedR, invertedG, invertedB, 'skin');
-                    }
-                    
-                    processedSkinData[i] = uvColor.r;
-                    processedSkinData[i + 1] = uvColor.g;
-                    processedSkinData[i + 2] = uvColor.b;
-                    processedSkinData[i + 3] = originalData[i + 3];
-                }
-            }
-            
-            // Create temporary ImageData for S-curve processing
-            const tempImageData = new ImageData(processedSkinData, width, height);
-            
-            // 7c) Apply non-linear S-curve contrast (only to processed skin)
-            this.applySCurveContrastToMask(tempImageData, featheredMask);
-            
-            // 7d) Preserve mid-tones (already handled in S-curve)
-            
-            // STEP 8: Temporal smoothing - blend CURRENT processed skin with PREVIOUS frame
-            if (this.lastProcessedSkin) {
-                for (let i = 0; i < processedSkinData.length; i += 4) {
-                    const x = (i / 4) % width;
-                    const y = Math.floor((i / 4) / width);
-                    const idx = y * width + x;
-                    const maskValue = featheredMask[idx] || 0;
-                    
-                    if (maskValue > 0) {
-                        // Only blend inside mask: 70% previous + 30% current
-                        processedSkinData[i] = this.colorSmoothingAlpha * this.lastProcessedSkin[i] + 
-                                               (1 - this.colorSmoothingAlpha) * processedSkinData[i];
-                        processedSkinData[i + 1] = this.colorSmoothingAlpha * this.lastProcessedSkin[i + 1] + 
-                                                   (1 - this.colorSmoothingAlpha) * processedSkinData[i + 1];
-                        processedSkinData[i + 2] = this.colorSmoothingAlpha * this.lastProcessedSkin[i + 2] + 
-                                                   (1 - this.colorSmoothingAlpha) * processedSkinData[i + 2];
-                    }
-                }
-            }
-            
-            // Store current processed skin for next frame
-            this.lastProcessedSkin = new Uint8ClampedArray(processedSkinData);
-            
-            // STEP 9: Composite processed face skin over processed background
-            const finalImageData = new ImageData(width, height);
-            for (let i = 0; i < originalData.length; i += 4) {
-                const x = (i / 4) % width;
-                const y = Math.floor((i / 4) / width);
-                const idx = y * width + x;
-                const maskValue = featheredMask[idx] || 0;
-                const bgMaskValue = backgroundMask[idx] || 0;
-                
-                if (maskValue > 0) {
-                    // Face skin - use processed UV colors with mask blend
-                    finalImageData.data[i] = this.lerp(processedBackgroundData[i], processedSkinData[i], maskValue);
-                    finalImageData.data[i + 1] = this.lerp(processedBackgroundData[i + 1], processedSkinData[i + 1], maskValue);
-                    finalImageData.data[i + 2] = this.lerp(processedBackgroundData[i + 2], processedSkinData[i + 2], maskValue);
-                    finalImageData.data[i + 3] = originalData[i + 3];
-                } else if (bgMaskValue > 0.5) {
-                    // Background - use clamped dark background
-                    finalImageData.data[i] = processedBackgroundData[i];
-                    finalImageData.data[i + 1] = processedBackgroundData[i + 1];
-                    finalImageData.data[i + 2] = processedBackgroundData[i + 2];
-                    finalImageData.data[i + 3] = originalData[i + 3];
-                } else {
-                    // Person but not face skin (clothes, etc.) - keep original
-                    finalImageData.data[i] = originalData[i];
-                    finalImageData.data[i + 1] = originalData[i + 1];
-                    finalImageData.data[i + 2] = originalData[i + 2];
-                    finalImageData.data[i + 3] = originalData[i + 3];
-                }
-            }
-            
-            // STEP 10: Apply very subtle global softness (AFTER compositing)
-            this.applySubtleGlobalSoftness(finalImageData, eyeMask, lipMask);
-            
-            // STEP 11: Apply very subtle vignette (opacity < 6%)
-            this.applySubtleVignette(finalImageData);
-            
-            // Put final image back
-            this.ctx.putImageData(finalImageData, 0, 0);
-            
-            // Draw logo
-            this.drawLogo();
+            this.ctx.putImageData(imageData, 0, 0);
+            // UV filter active
             
             this.frameCount++;
         } catch (error) {
@@ -1410,312 +1244,6 @@ class UVFaceFilter {
                 mask[idx] = value;
                 if (x + 1 < width) mask[idx + 1] = value;
                 if (y + 1 < height) mask[(y + 1) * width + x] = value;
-            }
-        }
-        
-        return mask;
-    }
-    
-    // Create person mask (face + body/clothes, excludes background)
-    createPersonMask(landmarks, width, height) {
-        const mask = new Float32Array(width * height);
-        
-        // Get face outline points (jawline, cheeks, forehead)
-        const faceOutlineIndices = [
-            // Jawline
-            172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323,
-            // Cheeks
-            234, 454, 227, 447,
-            // Forehead
-            10, 151, 9
-        ];
-        
-        const faceOutlinePoints = faceOutlineIndices
-            .filter(idx => idx < landmarks.length)
-            .map(idx => ({
-                x: landmarks[idx].x * width,
-                y: landmarks[idx].y * height
-            }));
-        
-        if (faceOutlinePoints.length === 0) return mask;
-        
-        // Find bounding box of face
-        const faceMinX = Math.min(...faceOutlinePoints.map(p => p.x));
-        const faceMaxX = Math.max(...faceOutlinePoints.map(p => p.x));
-        const faceMinY = Math.min(...faceOutlinePoints.map(p => p.y));
-        const faceMaxY = Math.max(...faceOutlinePoints.map(p => p.y));
-        
-        // Extend downward to include body/clothes (estimate person area)
-        const personMinX = Math.max(0, faceMinX - (faceMaxX - faceMinX) * 0.3);
-        const personMaxX = Math.min(width, faceMaxX + (faceMaxX - faceMinX) * 0.3);
-        const personMinY = faceMinY;
-        const personMaxY = Math.min(height, faceMaxY + (faceMaxY - faceMinY) * 2.5); // Extend down for body
-        
-        // Create person mask (face + estimated body area)
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const idx = y * width + x;
-                
-                // Check if inside face outline
-                const insideFace = this.isPointInPolygon(x, y, faceOutlinePoints);
-                
-                // Check if in estimated body area (below face)
-                const inBodyArea = (x >= personMinX && x <= personMaxX && 
-                                   y >= faceMaxY && y <= personMaxY);
-                
-                // Person mask: face OR body area
-                mask[idx] = (insideFace || inBodyArea) ? 1.0 : 0.0;
-            }
-        }
-        
-        return mask;
-    }
-    
-    // Create background mask (inverse of person mask)
-    createBackgroundMask(personMask, width, height) {
-        const mask = new Float32Array(width * height);
-        
-        for (let i = 0; i < personMask.length; i++) {
-            // Background = NOT person
-            mask[i] = personMask[i] > 0.5 ? 0.0 : 1.0;
-        }
-        
-        return mask;
-    }
-    
-    // Create STRICT binary skin-only mask (exclude clothes, background, hair)
-    createStrictBinarySkinMask(landmarks, width, height) {
-        const mask = new Float32Array(width * height);
-        
-        // Get face outline points (jawline, cheeks, forehead)
-        const faceOutlineIndices = [
-            // Jawline
-            172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323,
-            // Cheeks
-            234, 454, 227, 447,
-            // Forehead
-            10, 151, 9
-        ];
-        
-        const faceOutlinePoints = faceOutlineIndices
-            .filter(idx => idx < landmarks.length)
-            .map(idx => ({
-                x: landmarks[idx].x * width,
-                y: landmarks[idx].y * height
-            }));
-        
-        if (faceOutlinePoints.length === 0) return mask;
-        
-        // Get exclusion zones (eyes, lips, eyebrows, hair)
-        const eyeMask = this.createEyeMask(landmarks, width, height);
-        const lipMask = this.createLipMask(landmarks, width, height);
-        const eyebrowMask = this.createEyebrowMask(landmarks, width, height);
-        const hairMask = this.createHairMask(landmarks, width, height);
-        
-        // Create binary mask: 1 inside face, 0 outside
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const idx = y * width + x;
-                
-                // Check if inside face outline
-                const insideFace = this.isPointInPolygon(x, y, faceOutlinePoints);
-                
-                // Exclude eyes, lips, eyebrows, hair
-                const isExcluded = (eyeMask[idx] > 0.1) || 
-                                 (lipMask[idx] > 0.1) || 
-                                 (eyebrowMask[idx] > 0.1) || 
-                                 (hairMask[idx] > 0.3);
-                
-                // Binary: 1 for skin, 0 for everything else
-                mask[idx] = (insideFace && !isExcluded) ? 1.0 : 0.0;
-            }
-        }
-        
-        return mask;
-    }
-    
-    // Check if point is inside polygon
-    isPointInPolygon(x, y, points) {
-        let inside = false;
-        for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-            const xi = points[i].x, yi = points[i].y;
-            const xj = points[j].x, yj = points[j].y;
-            
-            const intersect = ((yi > y) !== (yj > y)) && 
-                            (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
-            if (intersect) inside = !inside;
-        }
-        return inside;
-    }
-    
-    // Apply adaptive feather ONLY to the mask (not to colors)
-    applyFeatherToMask(binaryMask, landmarks, width, height) {
-        const featheredMask = new Float32Array(binaryMask);
-        
-        // Find zones for adaptive feather
-        const jawlineIndices = [172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323];
-        const jawlinePoints = jawlineIndices
-            .filter(idx => idx < landmarks.length)
-            .map(idx => ({
-                x: landmarks[idx].x * width,
-                y: landmarks[idx].y * height
-            }));
-        
-        const hairlineIndices = [10, 151, 9, 107, 55, 65, 52, 53, 46];
-        const hairlinePoints = hairlineIndices
-            .filter(idx => idx < landmarks.length)
-            .map(idx => ({
-                x: landmarks[idx].x * width,
-                y: landmarks[idx].y * height
-            }));
-        
-        const cheekIndices = [234, 454, 227, 447];
-        const cheekPoints = cheekIndices
-            .filter(idx => idx < landmarks.length)
-            .map(idx => ({
-                x: landmarks[idx].x * width,
-                y: landmarks[idx].y * height
-            }));
-        
-        // Apply adaptive feather to mask edges
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const idx = y * width + x;
-                const maskValue = binaryMask[idx];
-                
-                // Only feather edges (transition from 0 to 1)
-                if (maskValue > 0 && maskValue < 1) {
-                    // Determine feather size based on zone
-                    const distToJawline = this.distanceToPolygon(x, y, jawlinePoints);
-                    const distToHairline = this.distanceToPolygon(x, y, hairlinePoints);
-                    const distToCheek = this.distanceToPolygon(x, y, cheekPoints);
-                    
-                    let featherSize;
-                    if (distToJawline < 30) {
-                        featherSize = 12 + (distToJawline / 30) * 4; // 12-16px
-                    } else if (distToHairline < 40) {
-                        featherSize = 16 + (distToHairline / 40) * 4; // 16-20px
-                    } else if (distToCheek < 25) {
-                        featherSize = 6 + (distToCheek / 25) * 2; // 6-8px
-                    } else {
-                        featherSize = 8;
-                    }
-                    
-                    // Apply Gaussian feather
-                    const edgeDist = Math.abs(maskValue - 0.5) * 2;
-                    const normalizedDist = edgeDist * featherSize;
-                    const feather = Math.exp(-normalizedDist * normalizedDist / (2 * featherSize * featherSize));
-                    featheredMask[idx] = Math.max(0, Math.min(1, maskValue + (1 - maskValue) * feather * 0.5));
-                }
-            }
-        }
-        
-        return featheredMask;
-    }
-    
-    // Create skin mask with adaptive feather blur (surgical precision)
-    // Jawline: 12-16px, Hairline: 16-20px, Cheeks/forehead: 6-8px
-    createSkinMaskWithFeather(landmarks, width, height) {
-        const baseMask = this.createSkinMask(landmarks, width, height);
-        
-        // Find jawline points (bottom of face) - 12-16px feather
-        const jawlineIndices = [172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323];
-        const jawlinePoints = jawlineIndices
-            .filter(idx => idx < landmarks.length)
-            .map(idx => ({
-                x: landmarks[idx].x * width,
-                y: landmarks[idx].y * height
-            }));
-        
-        // Find hairline points (top of face) - 16-20px feather
-        const hairlineIndices = [10, 151, 9, 107, 55, 65, 52, 53, 46];
-        const hairlinePoints = hairlineIndices
-            .filter(idx => idx < landmarks.length)
-            .map(idx => ({
-                x: landmarks[idx].x * width,
-                y: landmarks[idx].y * height
-            }));
-        
-        // Find cheek/forehead points - 6-8px feather
-        const cheekIndices = [234, 454, 227, 447]; // Left and right cheek points
-        const foreheadIndices = [10, 151, 9]; // Forehead points
-        const cheekPoints = [...cheekIndices, ...foreheadIndices]
-            .filter(idx => idx < landmarks.length)
-            .map(idx => ({
-                x: landmarks[idx].x * width,
-                y: landmarks[idx].y * height
-            }));
-        
-        // Apply adaptive feather with precise zones
-        const featheredMask = new Float32Array(baseMask);
-        
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const idx = y * width + x;
-                const maskValue = baseMask[idx];
-                
-                // Only feather edges (0 < mask < 1)
-                if (maskValue > 0 && maskValue < 1) {
-                    // Calculate distances to different zones
-                    const distToJawline = this.distanceToPolygon(x, y, jawlinePoints);
-                    const distToHairline = this.distanceToPolygon(x, y, hairlinePoints);
-                    const distToCheek = this.distanceToPolygon(x, y, cheekPoints);
-                    
-                    // Determine which zone we're in and apply appropriate feather
-                    let featherSize;
-                    if (distToJawline < 30) {
-                        // Jawline zone: 12-16px
-                        featherSize = 12 + (distToJawline / 30) * 4; // 12-16px
-                    } else if (distToHairline < 40) {
-                        // Hairline zone: 16-20px
-                        featherSize = 16 + (distToHairline / 40) * 4; // 16-20px
-                    } else if (distToCheek < 25) {
-                        // Cheek/forehead zone: 6-8px
-                        featherSize = 6 + (distToCheek / 25) * 2; // 6-8px
-                    } else {
-                        // Default: 8px
-                        featherSize = 8;
-                    }
-                    
-                    // Apply smooth Gaussian-like feather
-                    const edgeDistance = Math.abs(maskValue - 0.5) * 2; // 0 at edge, 1 at center
-                    const normalizedDist = edgeDistance * featherSize;
-                    const feather = Math.exp(-normalizedDist * normalizedDist / (2 * featherSize * featherSize));
-                    
-                    // Smooth transition
-                    featheredMask[idx] = Math.max(0, Math.min(1, maskValue + (1 - maskValue) * feather * 0.5));
-                }
-            }
-        }
-        
-        return featheredMask;
-    }
-    
-    createHairMask(landmarks, width, height) {
-        // Create mask for hair area (top of head, exclude from skin)
-        const mask = new Float32Array(width * height);
-        const hairlineIndices = [10, 151, 9, 107, 55, 65, 52, 53, 46, 336, 296, 334, 293, 300];
-        const hairlinePoints = hairlineIndices
-            .filter(idx => idx < landmarks.length)
-            .map(idx => ({
-                x: landmarks[idx].x * width,
-                y: landmarks[idx].y * height
-            }));
-        
-        if (hairlinePoints.length === 0) return mask;
-        
-        // Create a region above the hairline
-        const topY = Math.min(...hairlinePoints.map(p => p.y));
-        const bottomY = Math.max(...hairlinePoints.map(p => p.y));
-        
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                if (y < bottomY + 50) { // Area above hairline
-                    const dist = this.distanceToPolygon(x, y, hairlinePoints);
-                    if (dist < 80) {
-                        mask[y * width + x] = Math.max(0, 1 - dist / 80);
-                    }
-                }
             }
         }
         
@@ -1876,60 +1404,57 @@ class UVFaceFilter {
     applyUVLUT(r, g, b, type) {
         switch (type) {
             case 'skin':
-                // TikTok UV: Saturated ALIVE cyan-blue (not navy, not purple, not dead)
+                // Match TikTok UV filter: pale white skin with deep blue/purple shadows
+                // Original inverted colors are used to create the UV effect
                 const brightness = (r + g + b) / 3;
                 
-                // Map to vibrant cyan-blue spectrum (alive, not flat)
-                // Bright areas -> vibrant light cyan
-                // Dark areas -> deep saturated cyan-blue
-                if (brightness > 140) {
-                    // Light skin: vibrant pale cyan-blue (alive, not dead)
+                // Bright areas (normal skin) -> pale white/light blue
+                // Dark areas (shadows, sun damage) -> deep blue/purple
+                if (brightness > 128) {
+                    // Bright areas: pale white with slight blue tint
                     return {
-                        r: Math.min(255, Math.max(40, brightness * 0.35 + g * 0.25)),   // Some red for warmth
-                        g: Math.min(255, Math.max(140, brightness * 0.75 + g * 0.4)),  // Strong green-cyan
-                        b: Math.min(255, Math.max(180, brightness * 0.95 + b * 0.5))   // Very strong blue
+                        r: Math.min(255, Math.max(200, brightness * 0.9 + r * 0.1)),
+                        g: Math.min(255, Math.max(200, brightness * 0.85 + g * 0.15)),
+                        b: Math.min(255, Math.max(220, brightness * 0.95 + b * 0.15))
                     };
                 } else {
-                    // Dark skin/shadow: deep saturated ALIVE cyan-blue
+                    // Dark areas: deep blue/purple (shadows, sun damage)
                     return {
-                        r: Math.min(255, Math.max(20, r * 0.25 + b * 0.15)),    // Minimal but not zero red
-                        g: Math.min(255, Math.max(80, g * 0.7 + b * 0.6)),      // Very strong green-cyan
-                        b: Math.min(255, Math.max(140, b * 1.2 + g * 0.5))      // Maximum blue saturation
+                        r: Math.min(255, Math.max(0, r * 0.3 + b * 0.2)),
+                        g: Math.min(255, Math.max(0, g * 0.4 + b * 0.3)),
+                        b: Math.min(255, Math.max(80, b * 1.2 + r * 0.3))
                     };
                 }
             case 'eye':
-                // Near-white with detail preserved
+                // Glowing white eyes with dark pupils
                 const eyeBrightness = (r + g + b) / 3;
-                if (eyeBrightness > 80) {
-                    // Bright eyes -> near-white, preserve detail
-                    const detail = Math.min(1, eyeBrightness / 180);
+                if (eyeBrightness > 100) {
+                    // Bright eyes -> glowing white
                     return {
-                        r: Math.min(255, 200 + eyeBrightness * 0.3),
-                        g: Math.min(255, 200 + eyeBrightness * 0.3),
-                        b: Math.min(255, 220 + eyeBrightness * 0.25)
+                        r: Math.min(255, eyeBrightness * 1.5),
+                        g: Math.min(255, eyeBrightness * 1.5),
+                        b: Math.min(255, eyeBrightness * 1.5)
                     };
                 } else {
                     // Dark pupils -> very dark
                     return {
-                        r: Math.max(0, eyeBrightness * 0.2),
-                        g: Math.max(0, eyeBrightness * 0.2),
-                        b: Math.max(0, eyeBrightness * 0.25)
+                        r: Math.max(0, eyeBrightness * 0.3),
+                        g: Math.max(0, eyeBrightness * 0.3),
+                        b: Math.max(0, eyeBrightness * 0.3)
                     };
                 }
             case 'lip':
-                // Green-teal for lips
                 return {
-                    r: Math.min(255, Math.max(0, g * 0.3 + r * 0.1)),       // Low red
-                    g: Math.min(255, Math.max(100, g * 0.9 + b * 0.4)),    // Strong green
-                    b: Math.min(255, Math.max(120, g * 0.5 + b * 0.8))     // Strong teal-blue
+                    r: Math.min(255, Math.max(0, g * 0.5 + r * 0.2)),
+                    g: Math.min(255, Math.max(0, g * 0.9 + b * 0.2)),
+                    b: Math.min(255, Math.max(0, g * 0.4 + b * 0.3))
                 };
             case 'hair':
-                // Very light, almost white
                 const hairBrightness = (r + g + b) / 3;
                 return {
-                    r: Math.min(255, 180 + hairBrightness * 0.3),
-                    g: Math.min(255, 200 + hairBrightness * 0.3),
-                    b: Math.min(255, 220 + hairBrightness * 0.3)
+                    r: Math.min(255, hairBrightness * 1.15),
+                    g: Math.min(255, hairBrightness * 1.15),
+                    b: Math.min(255, hairBrightness * 1.15)
                 };
             default:
                 return { r, g, b };
@@ -1944,290 +1469,6 @@ class UVFaceFilter {
             data[i] = this.clamp(factor * (data[i] - 128) + 128);
             data[i + 1] = this.clamp(factor * (data[i + 1] - 128) + 128);
             data[i + 2] = this.clamp(factor * (data[i + 2] - 128) + 128);
-        }
-    }
-    
-    // S-curve contrast (non-linear) for cinematic feel
-    applySCurveContrast(imageData) {
-        const data = imageData.data;
-        const strength = 0.4; // S-curve strength
-        
-        for (let i = 0; i < data.length; i += 4) {
-            // Normalize to 0-1
-            let r = data[i] / 255;
-            let g = data[i + 1] / 255;
-            let b = data[i + 2] / 255;
-            
-            // Apply S-curve: enhance mid-tones, preserve highlights and shadows
-            const sCurve = (t) => {
-                if (t < 0.5) {
-                    return t * (1 - strength) + t * t * strength * 2;
-                } else {
-                    return t * (1 - strength) + (1 - (1 - t) * (1 - t)) * strength;
-                }
-            };
-            
-            r = sCurve(r);
-            g = sCurve(g);
-            b = sCurve(b);
-            
-            // Denormalize
-            data[i] = this.clamp(r * 255);
-            data[i + 1] = this.clamp(g * 255);
-            data[i + 2] = this.clamp(b * 255);
-        }
-    }
-    
-    // Apply S-curve contrast ONLY to masked regions
-    applySCurveContrastToMask(imageData, mask) {
-        const data = imageData.data;
-        const width = imageData.width;
-        const strength = 0.4;
-        
-        const sCurve = (t) => {
-            if (t < 0.5) {
-                return t * (1 - strength) + t * t * strength * 2;
-            } else {
-                return t * (1 - strength) + (1 - (1 - t) * (1 - t)) * strength;
-            }
-        };
-        
-        for (let i = 0; i < data.length; i += 4) {
-            const x = (i / 4) % width;
-            const y = Math.floor((i / 4) / width);
-            const idx = y * width + x;
-            const maskValue = mask[idx] || 0;
-            
-            if (maskValue > 0) {
-                // Normalize to 0-1
-                let r = data[i] / 255;
-                let g = data[i + 1] / 255;
-                let b = data[i + 2] / 255;
-                
-                // Apply S-curve
-                r = sCurve(r);
-                g = sCurve(g);
-                b = sCurve(b);
-                
-                // Denormalize
-                data[i] = this.clamp(r * 255);
-                data[i + 1] = this.clamp(g * 255);
-                data[i + 2] = this.clamp(b * 255);
-            }
-        }
-    }
-    
-    // Very subtle global softness (AFTER compositing)
-    applySubtleGlobalSoftness(imageData, eyeMask, lipMask) {
-        const data = imageData.data;
-        const width = imageData.width;
-        const height = imageData.height;
-        const tempData = new Uint8ClampedArray(data);
-        const radius = 1.5;
-        
-        for (let y = radius; y < height - radius; y++) {
-            for (let x = radius; x < width - radius; x++) {
-                const idx = (y * width + x) * 4;
-                const maskIdx = y * width + x;
-                
-                const eyeValue = eyeMask[maskIdx] || 0;
-                const lipValue = lipMask[maskIdx] || 0;
-                
-                // Keep eyes and lips sharp, apply subtle softness to everything else
-                if (eyeValue < 0.05 && lipValue < 0.05) {
-                    let rSum = 0, gSum = 0, bSum = 0, count = 0;
-                    
-                    for (let dy = -radius; dy <= radius; dy++) {
-                        for (let dx = -radius; dx <= radius; dx++) {
-                            const dist = Math.sqrt(dx * dx + dy * dy);
-                            if (dist <= radius) {
-                                const nIdx = ((y + dy) * width + (x + dx)) * 4;
-                                const weight = Math.exp(-dist * dist / (2 * radius * radius));
-                                rSum += tempData[nIdx] * weight;
-                                gSum += tempData[nIdx + 1] * weight;
-                                bSum += tempData[nIdx + 2] * weight;
-                                count += weight;
-                            }
-                        }
-                    }
-                    
-                    if (count > 0) {
-                        // Very subtle: 90% original, 10% blurred
-                        data[idx] = data[idx] * 0.9 + (rSum / count) * 0.1;
-                        data[idx + 1] = data[idx + 1] * 0.9 + (gSum / count) * 0.1;
-                        data[idx + 2] = data[idx + 2] * 0.9 + (bSum / count) * 0.1;
-                    }
-                }
-            }
-        }
-    }
-    
-    // Very subtle vignette (opacity < 6%)
-    applySubtleVignette(imageData) {
-        const data = imageData.data;
-        const width = imageData.width;
-        const height = imageData.height;
-        const centerX = width / 2;
-        const centerY = height / 2;
-        const maxDist = Math.sqrt(centerX ** 2 + centerY ** 2);
-        
-        for (let i = 0; i < data.length; i += 4) {
-            const x = (i / 4) % width;
-            const y = Math.floor((i / 4) / width);
-            const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
-            const normalizedDist = dist / maxDist;
-            const vignette = Math.pow(normalizedDist, 2) * 0.05; // <6% opacity
-            
-            data[i] = this.clamp(data[i] * (1 - vignette));
-            data[i + 1] = this.clamp(data[i + 1] * (1 - vignette));
-            data[i + 2] = this.clamp(data[i + 2] * (1 - vignette));
-        }
-    }
-    
-    // Depth and lighting effects: nose highlight, gentle gradients, subtle vignette (<6%)
-    applyDepthLighting(imageData, landmarks, skinMask) {
-        const data = imageData.data;
-        const width = imageData.width;
-        const height = imageData.height;
-        
-        // Find nose bridge for highlight
-        const noseTipIdx = 4;
-        const noseBridgeIdx = 6;
-        let noseX = width / 2, noseY = height / 2;
-        if (landmarks && landmarks[noseTipIdx]) {
-            noseX = landmarks[noseTipIdx].x * width;
-            noseY = landmarks[noseTipIdx].y * height;
-        }
-        
-        // Find forehead center for gradient
-        const foreheadIdx = 10;
-        let foreheadX = width / 2, foreheadY = height * 0.2;
-        if (landmarks && landmarks[foreheadIdx]) {
-            foreheadX = landmarks[foreheadIdx].x * width;
-            foreheadY = landmarks[foreheadIdx].y * height;
-        }
-        
-        // Find cheek points for gentle gradient falloff
-        const leftCheekIdx = 234;
-        const rightCheekIdx = 454;
-        let leftCheekX = width * 0.3, leftCheekY = height * 0.5;
-        let rightCheekX = width * 0.7, rightCheekY = height * 0.5;
-        if (landmarks && landmarks[leftCheekIdx]) {
-            leftCheekX = landmarks[leftCheekIdx].x * width;
-            leftCheekY = landmarks[leftCheekIdx].y * height;
-        }
-        if (landmarks && landmarks[rightCheekIdx]) {
-            rightCheekX = landmarks[rightCheekIdx].x * width;
-            rightCheekY = landmarks[rightCheekIdx].y * height;
-        }
-        
-        for (let i = 0; i < data.length; i += 4) {
-            const x = (i / 4) % width;
-            const y = Math.floor((i / 4) / width);
-            const idx = y * width + x;
-            const skinValue = skinMask[idx] || 0;
-            
-            if (skinValue > 0.1) {
-                // Nose bridge highlight (slightly brighter)
-                const distToNose = Math.sqrt((x - noseX) ** 2 + (y - noseY) ** 2);
-                const noseHighlight = Math.exp(-distToNose * distToNose / (2 * 35 * 35)) * 0.12; // Gaussian falloff
-                
-                // Gentle gradient on cheeks (subtle falloff)
-                const distToLeftCheek = Math.sqrt((x - leftCheekX) ** 2 + (y - leftCheekY) ** 2);
-                const distToRightCheek = Math.sqrt((x - rightCheekX) ** 2 + (y - rightCheekY) ** 2);
-                const minCheekDist = Math.min(distToLeftCheek, distToRightCheek);
-                const cheekGradient = Math.exp(-minCheekDist * minCheekDist / (2 * 100 * 100)) * 0.08; // Gentle
-                
-                // Forehead gradient (subtle)
-                const distToForehead = Math.sqrt((x - foreheadX) ** 2 + (y - foreheadY) ** 2);
-                const foreheadGradient = Math.exp(-distToForehead * distToForehead / (2 * 120 * 120)) * 0.06;
-                
-                // Combine lighting (UV light feel, not HDR)
-                const lighting = noseHighlight - cheekGradient + foreheadGradient;
-                data[i] = this.clamp(data[i] + lighting * 25);
-                data[i + 1] = this.clamp(data[i + 1] + lighting * 25);
-                data[i + 2] = this.clamp(data[i + 2] + lighting * 25);
-            }
-        }
-        
-        // Very subtle vignette (<6% opacity)
-        const centerX = width / 2;
-        const centerY = height / 2;
-        const maxDist = Math.sqrt(centerX ** 2 + centerY ** 2);
-        
-        for (let i = 0; i < data.length; i += 4) {
-            const x = (i / 4) % width;
-            const y = Math.floor((i / 4) / width);
-            const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
-            const normalizedDist = dist / maxDist;
-            const vignette = Math.pow(normalizedDist, 2) * 0.05; // <6% opacity, very subtle
-            
-            data[i] = this.clamp(data[i] * (1 - vignette));
-            data[i + 1] = this.clamp(data[i + 1] * (1 - vignette));
-            data[i + 2] = this.clamp(data[i + 2] * (1 - vignette));
-        }
-    }
-    
-    // Temporal color stability: 70% previous frame, 30% current frame
-    applyTemporalColorSmoothing(imageData, lastFrameData) {
-        const data = imageData.data;
-        const alpha = this.colorSmoothingAlpha; // 0.7 = 70% previous, 30% current
-        
-        for (let i = 0; i < data.length; i += 4) {
-            // Blend: 70% previous + 30% current
-            data[i] = alpha * lastFrameData[i] + (1 - alpha) * data[i];
-            data[i + 1] = alpha * lastFrameData[i + 1] + (1 - alpha) * data[i + 1];
-            data[i + 2] = alpha * lastFrameData[i + 2] + (1 - alpha) * data[i + 2];
-        }
-    }
-    
-    // Adaptive softness: very subtle global softness, sharp features (eyes, nose, lips)
-    applyAdaptiveSoftness(imageData, skinMask, eyeMask, lipMask) {
-        const data = imageData.data;
-        const width = imageData.width;
-        const height = imageData.height;
-        const tempData = new Uint8ClampedArray(data);
-        const radius = 1.5; // Very light blur radius for subtle softness
-        
-        // Apply very subtle global softness first (affects everything slightly)
-        for (let y = radius; y < height - radius; y++) {
-            for (let x = radius; x < width - radius; x++) {
-                const idx = (y * width + x) * 4;
-                const maskIdx = y * width + x;
-                
-                const skinValue = skinMask[maskIdx] || 0;
-                const eyeValue = eyeMask[maskIdx] || 0;
-                const lipValue = lipMask[maskIdx] || 0;
-                
-                // Very subtle softness on skin (85% original, 15% blurred)
-                // Keep eyes, nose, lips completely sharp (100% original)
-                if (skinValue > 0.1 && eyeValue < 0.05 && lipValue < 0.05) {
-                    let rSum = 0, gSum = 0, bSum = 0, count = 0;
-                    
-                    // Very light Gaussian blur
-                    for (let dy = -radius; dy <= radius; dy++) {
-                        for (let dx = -radius; dx <= radius; dx++) {
-                            const dist = Math.sqrt(dx * dx + dy * dy);
-                            if (dist <= radius) {
-                                const nIdx = ((y + dy) * width + (x + dx)) * 4;
-                                const weight = Math.exp(-dist * dist / (2 * radius * radius));
-                                rSum += tempData[nIdx] * weight;
-                                gSum += tempData[nIdx + 1] * weight;
-                                bSum += tempData[nIdx + 2] * weight;
-                                count += weight;
-                            }
-                        }
-                    }
-                    
-                    if (count > 0) {
-                        // Very subtle blend: 85% original, 15% blurred (TikTok-style softness)
-                        data[idx] = data[idx] * 0.85 + (rSum / count) * 0.15;
-                        data[idx + 1] = data[idx + 1] * 0.85 + (gSum / count) * 0.15;
-                        data[idx + 2] = data[idx + 2] * 0.85 + (bSum / count) * 0.15;
-                    }
-                }
-                // Features (eyes, lips) remain 100% sharp - no blur applied
-            }
         }
     }
     
