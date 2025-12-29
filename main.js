@@ -1862,6 +1862,112 @@ class UVFaceFilter {
         }
     }
     
+    // Apply S-curve contrast ONLY to masked regions
+    applySCurveContrastToMask(imageData, mask) {
+        const data = imageData.data;
+        const width = imageData.width;
+        const strength = 0.4;
+        
+        const sCurve = (t) => {
+            if (t < 0.5) {
+                return t * (1 - strength) + t * t * strength * 2;
+            } else {
+                return t * (1 - strength) + (1 - (1 - t) * (1 - t)) * strength;
+            }
+        };
+        
+        for (let i = 0; i < data.length; i += 4) {
+            const x = (i / 4) % width;
+            const y = Math.floor((i / 4) / width);
+            const idx = y * width + x;
+            const maskValue = mask[idx] || 0;
+            
+            if (maskValue > 0) {
+                // Normalize to 0-1
+                let r = data[i] / 255;
+                let g = data[i + 1] / 255;
+                let b = data[i + 2] / 255;
+                
+                // Apply S-curve
+                r = sCurve(r);
+                g = sCurve(g);
+                b = sCurve(b);
+                
+                // Denormalize
+                data[i] = this.clamp(r * 255);
+                data[i + 1] = this.clamp(g * 255);
+                data[i + 2] = this.clamp(b * 255);
+            }
+        }
+    }
+    
+    // Very subtle global softness (AFTER compositing)
+    applySubtleGlobalSoftness(imageData, eyeMask, lipMask) {
+        const data = imageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+        const tempData = new Uint8ClampedArray(data);
+        const radius = 1.5;
+        
+        for (let y = radius; y < height - radius; y++) {
+            for (let x = radius; x < width - radius; x++) {
+                const idx = (y * width + x) * 4;
+                const maskIdx = y * width + x;
+                
+                const eyeValue = eyeMask[maskIdx] || 0;
+                const lipValue = lipMask[maskIdx] || 0;
+                
+                // Keep eyes and lips sharp, apply subtle softness to everything else
+                if (eyeValue < 0.05 && lipValue < 0.05) {
+                    let rSum = 0, gSum = 0, bSum = 0, count = 0;
+                    
+                    for (let dy = -radius; dy <= radius; dy++) {
+                        for (let dx = -radius; dx <= radius; dx++) {
+                            const dist = Math.sqrt(dx * dx + dy * dy);
+                            if (dist <= radius) {
+                                const nIdx = ((y + dy) * width + (x + dx)) * 4;
+                                const weight = Math.exp(-dist * dist / (2 * radius * radius));
+                                rSum += tempData[nIdx] * weight;
+                                gSum += tempData[nIdx + 1] * weight;
+                                bSum += tempData[nIdx + 2] * weight;
+                                count += weight;
+                            }
+                        }
+                    }
+                    
+                    if (count > 0) {
+                        // Very subtle: 90% original, 10% blurred
+                        data[idx] = data[idx] * 0.9 + (rSum / count) * 0.1;
+                        data[idx + 1] = data[idx + 1] * 0.9 + (gSum / count) * 0.1;
+                        data[idx + 2] = data[idx + 2] * 0.9 + (bSum / count) * 0.1;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Very subtle vignette (opacity < 6%)
+    applySubtleVignette(imageData) {
+        const data = imageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const maxDist = Math.sqrt(centerX ** 2 + centerY ** 2);
+        
+        for (let i = 0; i < data.length; i += 4) {
+            const x = (i / 4) % width;
+            const y = Math.floor((i / 4) / width);
+            const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+            const normalizedDist = dist / maxDist;
+            const vignette = Math.pow(normalizedDist, 2) * 0.05; // <6% opacity
+            
+            data[i] = this.clamp(data[i] * (1 - vignette));
+            data[i + 1] = this.clamp(data[i + 1] * (1 - vignette));
+            data[i + 2] = this.clamp(data[i + 2] * (1 - vignette));
+        }
+    }
+    
     // Depth and lighting effects: nose highlight, gentle gradients, subtle vignette (<6%)
     applyDepthLighting(imageData, landmarks, skinMask) {
         const data = imageData.data;
