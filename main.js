@@ -925,27 +925,10 @@ class UVFaceFilter {
                         isPerson = true;
                     }
                     
-                    // BACKGROUND PROCESSING - Keep dark and untouched
+                    // BACKGROUND PROCESSING - Keep normal, no processing
                     if (!isPerson) {
-                        const brightness = (r + g + b) / 3;
-                        const maxChannel = Math.max(r, g, b);
-                        const minChannel = Math.min(r, g, b);
-                        const saturation = maxChannel > 0 ? (maxChannel - minChannel) / maxChannel : 0;
-                        
-                        // Shadow suppression - very dark, low saturation areas
-                        if (brightness < 80 && saturation < 0.2) {
-                            // Pure background shadow - make it very dark
-                            data[i] = Math.max(0, brightness * 0.3);     // R
-                            data[i + 1] = Math.max(0, brightness * 0.3); // G
-                            data[i + 2] = Math.max(0, brightness * 0.3); // B
-                        } else {
-                            // Regular background - darken and desaturate
-                            const darkenFactor = 0.4;
-                            const gray = brightness * darkenFactor;
-                            data[i] = gray;     // R
-                            data[i + 1] = gray;  // G
-                            data[i + 2] = gray;  // B
-                        }
+                        // Keep background as original - no processing
+                        // Background stays normal, only person gets UV filter
                         continue;
                     }
                     
