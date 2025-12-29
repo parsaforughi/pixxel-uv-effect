@@ -603,12 +603,15 @@ class UVFaceFilter {
             
             this.selfieSegmentation.onResults((results) => {
                 if (results.segmentationMask) {
-                    // Store the segmentation mask for use in filter processing
+                    // Store the segmentation mask canvas element
                     this.lastSegmentationMask = results.segmentationMask;
                     deepLog('SEGMENTATION', 'Segmentation mask received', {
-                        width: results.segmentationMask.width,
-                        height: results.segmentationMask.height
+                        hasMask: !!results.segmentationMask,
+                        width: results.segmentationMask.width || 'unknown',
+                        height: results.segmentationMask.height || 'unknown'
                     });
+                } else {
+                    deepLog('SEGMENTATION', 'No segmentation mask in results');
                 }
             });
             
