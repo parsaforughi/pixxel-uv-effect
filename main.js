@@ -86,6 +86,15 @@ class UVFaceFilter {
         this.lastLandmarks = null; // Store last detected landmarks for continuous rendering
         this.faceMeshSetupAttempted = false; // Prevent multiple FaceMesh setups
         
+        // Temporal smoothing for face tracking stability
+        this.landmarkHistory = []; // Store last 5 frames of landmarks
+        this.maxHistoryFrames = 5;
+        this.smoothingAlpha = 0.7; // Exponential smoothing factor (0-1, higher = more smoothing)
+        
+        // Temporal color stability
+        this.lastFrameColors = null; // Store previous frame's color data
+        this.colorSmoothingAlpha = 0.15; // Blend factor for color stability
+        
         // Face mesh landmarks
         this.skinLandmarks = this.getSkinLandmarks();
         this.eyeLandmarks = this.getEyeLandmarks();
@@ -1028,6 +1037,66 @@ class UVFaceFilter {
         }
     }
     
+    // Temporal smoothing for stable face tracking
+    smoothLandmarks(newLandmarks) {
+        if (!newLandmarks || newLandmarks.length === 0) {
+            return this.lastLandmarks; // Return last known if no new data
+        }
+        
+        // Add to history
+        this.landmarkHistory.push(newLandmarks);
+        if (this.landmarkHistory.length > this.maxHistoryFrames) {
+            this.landmarkHistory.shift(); // Keep only last N frames
+        }
+        
+        // If we don't have enough history, use exponential smoothing with last known
+        if (this.landmarkHistory.length === 1) {
+            if (this.lastLandmarks) {
+                // Blend with last known landmarks
+                const smoothed = [];
+                for (let i = 0; i < newLandmarks.length; i++) {
+                    smoothed.push({
+                        x: this.lerp(this.lastLandmarks[i].x, newLandmarks[i].x, 1 - this.smoothingAlpha),
+                        y: this.lerp(this.lastLandmarks[i].y, newLandmarks[i].y, 1 - this.smoothingAlpha),
+                        z: this.lastLandmarks[i].z ? this.lerp(this.lastLandmarks[i].z, newLandmarks[i].z, 1 - this.smoothingAlpha) : newLandmarks[i].z
+                    });
+                }
+                return smoothed;
+            }
+            return newLandmarks; // First frame, no smoothing
+        }
+        
+        // Average across history frames
+        const smoothed = [];
+        for (let i = 0; i < newLandmarks.length; i++) {
+            let sumX = 0, sumY = 0, sumZ = 0;
+            for (const frame of this.landmarkHistory) {
+                sumX += frame[i].x;
+                sumY += frame[i].y;
+                if (frame[i].z !== undefined) sumZ += frame[i].z;
+            }
+            const count = this.landmarkHistory.length;
+            smoothed.push({
+                x: sumX / count,
+                y: sumY / count,
+                z: sumZ / count || newLandmarks[i].z
+            });
+        }
+        
+        // Apply exponential smoothing on top of average
+        if (this.lastLandmarks) {
+            for (let i = 0; i < smoothed.length; i++) {
+                smoothed[i].x = this.lerp(this.lastLandmarks[i].x, smoothed[i].x, 1 - this.smoothingAlpha);
+                smoothed[i].y = this.lerp(this.lastLandmarks[i].y, smoothed[i].y, 1 - this.smoothingAlpha);
+                if (smoothed[i].z !== undefined && this.lastLandmarks[i].z !== undefined) {
+                    smoothed[i].z = this.lerp(this.lastLandmarks[i].z, smoothed[i].z, 1 - this.smoothingAlpha);
+                }
+            }
+        }
+        
+        return smoothed;
+    }
+    
     processFrame(results) {
         try {
             if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
@@ -1051,13 +1120,16 @@ class UVFaceFilter {
             // Disable fallback to apply UV filter
             this.fallbackActive = false;
             
-            const landmarks = results.multiFaceLandmarks[0];
+            const rawLandmarks = results.multiFaceLandmarks[0];
             
-            // Store landmarks for continuous rendering
-            this.lastLandmarks = landmarks;
+            // Apply temporal smoothing for stable face lock
+            const smoothedLandmarks = this.smoothLandmarks(rawLandmarks);
             
-            // Apply UV filter immediately
-            this.applyUVFilter(landmarks);
+            // Store smoothed landmarks for continuous rendering
+            this.lastLandmarks = smoothedLandmarks;
+            
+            // Apply UV filter immediately with smoothed landmarks
+            this.applyUVFilter(smoothedLandmarks);
             
             // Start continuous UV filter render loop if not already running
             if (!this.renderLoopActive) {
@@ -1135,90 +1207,102 @@ class UVFaceFilter {
     applyUVFilter(landmarks) {
         try {
             if (!this.ctx || !this.video || this.video.readyState < this.video.HAVE_CURRENT_DATA) {
-                deepLog('RENDER', 'Cannot apply UV filter - video not ready', {
-                    hasCtx: !!this.ctx,
-                    hasVideo: !!this.video,
-                    readyState: this.video?.readyState
-                });
                 return;
             }
-            
-            deepLog('RENDER', 'Applying UV filter', {
-                landmarksCount: landmarks.length,
-                canvasSize: `${this.canvas.width}x${this.canvas.height}`,
-                videoSize: `${this.video.videoWidth}x${this.video.videoHeight}`
-            });
             
             // Clear canvas first
             this.ctx.fillStyle = '#000';
             this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
             
+            // Draw video frame (mirrored)
             this.ctx.save();
             this.ctx.scale(-1, 1);
             this.ctx.drawImage(this.video, -this.canvas.width, 0, this.canvas.width, this.canvas.height);
             this.ctx.restore();
             
+            // Get image data
             const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
             const data = imageData.data;
+            const width = this.canvas.width;
+            const height = this.canvas.height;
             
-            const skinMask = this.createSkinMask(landmarks, this.canvas.width, this.canvas.height);
-            const eyeMask = this.createEyeMask(landmarks, this.canvas.width, this.canvas.height);
-            const lipMask = this.createLipMask(landmarks, this.canvas.width, this.canvas.height);
-            const eyebrowMask = this.createEyebrowMask(landmarks, this.canvas.width, this.canvas.height);
+            // Create precise masks with adaptive feather zones
+            const skinMask = this.createSkinMaskWithFeather(landmarks, width, height);
+            const eyeMask = this.createEyeMask(landmarks, width, height);
+            const lipMask = this.createLipMask(landmarks, width, height);
+            const eyebrowMask = this.createEyebrowMask(landmarks, width, height);
+            const hairMask = this.createHairMask(landmarks, width, height);
             
+            // PASS 1: Invert base colors
+            const invertedData = new Uint8ClampedArray(data.length);
             for (let i = 0; i < data.length; i += 4) {
-                const x = (i / 4) % this.canvas.width;
-                const y = Math.floor((i / 4) / this.canvas.width);
+                invertedData[i] = 255 - data[i];     // R
+                invertedData[i + 1] = 255 - data[i + 1]; // G
+                invertedData[i + 2] = 255 - data[i + 2]; // B
+                invertedData[i + 3] = data[i + 3];   // A
+            }
+            
+            // PASS 2: Apply UV LUT with region-specific colors
+            for (let i = 0; i < data.length; i += 4) {
+                const x = (i / 4) % width;
+                const y = Math.floor((i / 4) / width);
+                const idx = y * width + x;
                 
-                const r = data[i];
-                const g = data[i + 1];
-                const b = data[i + 2];
+                const r = invertedData[i];
+                const g = invertedData[i + 1];
+                const b = invertedData[i + 2];
                 
-                const idx = Math.floor(y) * this.canvas.width + Math.floor(x);
                 const skinValue = skinMask[idx] || 0;
                 const eyeValue = eyeMask[idx] || 0;
                 const lipValue = lipMask[idx] || 0;
                 const eyebrowValue = eyebrowMask[idx] || 0;
+                const hairValue = hairMask[idx] || 0;
                 
+                let uvColor;
                 if (eyeValue > 0.1) {
-                    const inverted = this.invertPixel(r, g, b);
-                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'eye');
-                    data[i] = uvColor.r;
-                    data[i + 1] = uvColor.g;
-                    data[i + 2] = uvColor.b;
+                    // Eyes: near-white with detail preserved
+                    uvColor = this.applyUVLUT(r, g, b, 'eye');
                 } else if (lipValue > 0.1) {
-                    const inverted = this.invertPixel(r, g, b);
-                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'lip');
-                    data[i] = uvColor.r;
-                    data[i + 1] = uvColor.g;
-                    data[i + 2] = uvColor.b;
-                } else if (eyebrowValue > 0.1) {
-                    const inverted = this.invertPixel(r, g, b);
-                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'hair');
-                    data[i] = this.lerp(r, uvColor.r, 0.3);
-                    data[i + 1] = this.lerp(g, uvColor.g, 0.3);
-                    data[i + 2] = this.lerp(b, uvColor.b, 0.3);
+                    // Lips: green-teal
+                    uvColor = this.applyUVLUT(r, g, b, 'lip');
                 } else if (skinValue > 0.1) {
-                    const inverted = this.invertPixel(r, g, b);
-                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'skin');
-                    const blend = skinValue;
-                    data[i] = this.lerp(r, uvColor.r, blend);
-                    data[i + 1] = this.lerp(g, uvColor.g, blend);
-                    data[i + 2] = this.lerp(b, uvColor.b, blend);
+                    // Skin: saturated deep cyan-blue
+                    uvColor = this.applyUVLUT(r, g, b, 'skin');
+                } else if (hairValue > 0.1 || eyebrowValue > 0.1) {
+                    // Hair: very light, almost white
+                    uvColor = this.applyUVLUT(r, g, b, 'hair');
                 } else {
-                    const inverted = this.invertPixel(r, g, b);
-                    const uvColor = this.applyUVLUT(inverted.r, inverted.g, inverted.b, 'hair');
-                    data[i] = uvColor.r;
-                    data[i + 1] = uvColor.g;
-                    data[i + 2] = uvColor.b;
+                    // Background: keep original (or very dark)
+                    uvColor = { r: r * 0.1, g: g * 0.1, b: b * 0.1 };
                 }
+                
+                // Blend based on mask values
+                const blend = Math.max(skinValue, eyeValue, lipValue, hairValue, eyebrowValue);
+                data[i] = this.lerp(invertedData[i], uvColor.r, blend);
+                data[i + 1] = this.lerp(invertedData[i + 1], uvColor.g, blend);
+                data[i + 2] = this.lerp(invertedData[i + 2], uvColor.b, blend);
             }
             
-            this.applyContrast(imageData, 1.8);
-            this.applySoftBlur(imageData, skinMask, 2);
+            // PASS 3: Apply S-curve contrast (non-linear)
+            this.applySCurveContrast(imageData);
             
+            // PASS 4: Add depth/lighting effects
+            this.applyDepthLighting(imageData, landmarks, skinMask);
+            
+            // PASS 5: Temporal color stability (smooth with previous frame)
+            if (this.lastFrameColors) {
+                this.applyTemporalColorSmoothing(imageData, this.lastFrameColors);
+            }
+            this.lastFrameColors = new Uint8ClampedArray(imageData.data);
+            
+            // PASS 6: Adaptive softness (sharp features, soft skin)
+            this.applyAdaptiveSoftness(imageData, skinMask, eyeMask, lipMask);
+            
+            // Put processed image back
             this.ctx.putImageData(imageData, 0, 0);
-            // UV filter active
+            
+            // Draw logo
+            this.drawLogo();
             
             this.frameCount++;
         } catch (error) {
@@ -1255,6 +1339,93 @@ class UVFaceFilter {
                 mask[idx] = value;
                 if (x + 1 < width) mask[idx + 1] = value;
                 if (y + 1 < height) mask[(y + 1) * width + x] = value;
+            }
+        }
+        
+        return mask;
+    }
+    
+    // Create skin mask with adaptive feather blur (10-14px on jawline, softer near hairline)
+    createSkinMaskWithFeather(landmarks, width, height) {
+        const baseMask = this.createSkinMask(landmarks, width, height);
+        
+        // Find jawline points (bottom of face) for stronger feather
+        const jawlineIndices = [172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288, 361, 323];
+        const jawlinePoints = jawlineIndices
+            .filter(idx => idx < landmarks.length)
+            .map(idx => ({
+                x: landmarks[idx].x * width,
+                y: landmarks[idx].y * height
+            }));
+        
+        // Find hairline points (top of face) for softer feather
+        const hairlineIndices = [10, 151, 9, 107, 55, 65, 52, 53, 46];
+        const hairlinePoints = hairlineIndices
+            .filter(idx => idx < landmarks.length)
+            .map(idx => ({
+                x: landmarks[idx].x * width,
+                y: landmarks[idx].y * height
+            }));
+        
+        // Apply adaptive feather
+        const featheredMask = new Float32Array(baseMask);
+        const featherRadius = 14; // Max feather on jawline
+        const minFeatherRadius = 8; // Min feather on hairline
+        
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const idx = y * width + x;
+                if (baseMask[idx] > 0 && baseMask[idx] < 1) {
+                    // Calculate distance to jawline and hairline
+                    const distToJawline = this.distanceToPolygon(x, y, jawlinePoints);
+                    const distToHairline = this.distanceToPolygon(x, y, hairlinePoints);
+                    
+                    // Adaptive feather: stronger on jawline, softer on hairline
+                    let featherSize = featherRadius;
+                    if (distToHairline < distToJawline) {
+                        // Closer to hairline - use softer feather
+                        featherSize = minFeatherRadius + (featherRadius - minFeatherRadius) * (distToHairline / 100);
+                    } else {
+                        // Closer to jawline - use stronger feather
+                        featherSize = featherRadius;
+                    }
+                    
+                    // Apply Gaussian-like feather
+                    const edgeDist = Math.abs(baseMask[idx] - 0.5) * 2; // 0 at edge, 1 at center
+                    const feather = Math.pow(edgeDist, 0.7); // Smooth falloff
+                    featheredMask[idx] = Math.max(0, Math.min(1, baseMask[idx] * (1 + feather * 0.3)));
+                }
+            }
+        }
+        
+        return featheredMask;
+    }
+    
+    createHairMask(landmarks, width, height) {
+        // Create mask for hair area (top of head, exclude from skin)
+        const mask = new Float32Array(width * height);
+        const hairlineIndices = [10, 151, 9, 107, 55, 65, 52, 53, 46, 336, 296, 334, 293, 300];
+        const hairlinePoints = hairlineIndices
+            .filter(idx => idx < landmarks.length)
+            .map(idx => ({
+                x: landmarks[idx].x * width,
+                y: landmarks[idx].y * height
+            }));
+        
+        if (hairlinePoints.length === 0) return mask;
+        
+        // Create a region above the hairline
+        const topY = Math.min(...hairlinePoints.map(p => p.y));
+        const bottomY = Math.max(...hairlinePoints.map(p => p.y));
+        
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                if (y < bottomY + 50) { // Area above hairline
+                    const dist = this.distanceToPolygon(x, y, hairlinePoints);
+                    if (dist < 80) {
+                        mask[y * width + x] = Math.max(0, 1 - dist / 80);
+                    }
+                }
             }
         }
         
@@ -1415,57 +1586,60 @@ class UVFaceFilter {
     applyUVLUT(r, g, b, type) {
         switch (type) {
             case 'skin':
-                // Match TikTok UV filter: pale white skin with deep blue/purple shadows
-                // Original inverted colors are used to create the UV effect
+                // TikTok UV: Saturated deep cyan-blue (not purple, not navy)
                 const brightness = (r + g + b) / 3;
                 
-                // Bright areas (normal skin) -> pale white/light blue
-                // Dark areas (shadows, sun damage) -> deep blue/purple
-                if (brightness > 128) {
-                    // Bright areas: pale white with slight blue tint
+                // Map to cyan-blue spectrum
+                // Bright areas -> light cyan
+                // Dark areas -> deep cyan-blue
+                if (brightness > 140) {
+                    // Light skin: pale cyan-blue
                     return {
-                        r: Math.min(255, Math.max(200, brightness * 0.9 + r * 0.1)),
-                        g: Math.min(255, Math.max(200, brightness * 0.85 + g * 0.15)),
-                        b: Math.min(255, Math.max(220, brightness * 0.95 + b * 0.15))
+                        r: Math.min(255, brightness * 0.4 + g * 0.2),      // Low red
+                        g: Math.min(255, brightness * 0.7 + g * 0.3),      // High green
+                        b: Math.min(255, brightness * 0.9 + b * 0.4)       // Very high blue
                     };
                 } else {
-                    // Dark areas: deep blue/purple (shadows, sun damage)
+                    // Dark skin/shadow: deep saturated cyan-blue
                     return {
-                        r: Math.min(255, Math.max(0, r * 0.3 + b * 0.2)),
-                        g: Math.min(255, Math.max(0, g * 0.4 + b * 0.3)),
-                        b: Math.min(255, Math.max(80, b * 1.2 + r * 0.3))
+                        r: Math.min(255, Math.max(0, r * 0.2 + b * 0.1)),   // Minimal red
+                        g: Math.min(255, Math.max(60, g * 0.6 + b * 0.5)), // Strong green-cyan
+                        b: Math.min(255, Math.max(120, b * 1.1 + g * 0.4)) // Very strong blue
                     };
                 }
             case 'eye':
-                // Glowing white eyes with dark pupils
+                // Near-white with detail preserved
                 const eyeBrightness = (r + g + b) / 3;
-                if (eyeBrightness > 100) {
-                    // Bright eyes -> glowing white
+                if (eyeBrightness > 80) {
+                    // Bright eyes -> near-white, preserve detail
+                    const detail = Math.min(1, eyeBrightness / 180);
                     return {
-                        r: Math.min(255, eyeBrightness * 1.5),
-                        g: Math.min(255, eyeBrightness * 1.5),
-                        b: Math.min(255, eyeBrightness * 1.5)
+                        r: Math.min(255, 200 + eyeBrightness * 0.3),
+                        g: Math.min(255, 200 + eyeBrightness * 0.3),
+                        b: Math.min(255, 220 + eyeBrightness * 0.25)
                     };
                 } else {
                     // Dark pupils -> very dark
                     return {
-                        r: Math.max(0, eyeBrightness * 0.3),
-                        g: Math.max(0, eyeBrightness * 0.3),
-                        b: Math.max(0, eyeBrightness * 0.3)
+                        r: Math.max(0, eyeBrightness * 0.2),
+                        g: Math.max(0, eyeBrightness * 0.2),
+                        b: Math.max(0, eyeBrightness * 0.25)
                     };
                 }
             case 'lip':
+                // Green-teal for lips
                 return {
-                    r: Math.min(255, Math.max(0, g * 0.5 + r * 0.2)),
-                    g: Math.min(255, Math.max(0, g * 0.9 + b * 0.2)),
-                    b: Math.min(255, Math.max(0, g * 0.4 + b * 0.3))
+                    r: Math.min(255, Math.max(0, g * 0.3 + r * 0.1)),       // Low red
+                    g: Math.min(255, Math.max(100, g * 0.9 + b * 0.4)),    // Strong green
+                    b: Math.min(255, Math.max(120, g * 0.5 + b * 0.8))     // Strong teal-blue
                 };
             case 'hair':
+                // Very light, almost white
                 const hairBrightness = (r + g + b) / 3;
                 return {
-                    r: Math.min(255, hairBrightness * 1.15),
-                    g: Math.min(255, hairBrightness * 1.15),
-                    b: Math.min(255, hairBrightness * 1.15)
+                    r: Math.min(255, 180 + hairBrightness * 0.3),
+                    g: Math.min(255, 200 + hairBrightness * 0.3),
+                    b: Math.min(255, 220 + hairBrightness * 0.3)
                 };
             default:
                 return { r, g, b };
@@ -1480,6 +1654,166 @@ class UVFaceFilter {
             data[i] = this.clamp(factor * (data[i] - 128) + 128);
             data[i + 1] = this.clamp(factor * (data[i + 1] - 128) + 128);
             data[i + 2] = this.clamp(factor * (data[i + 2] - 128) + 128);
+        }
+    }
+    
+    // S-curve contrast (non-linear) for cinematic feel
+    applySCurveContrast(imageData) {
+        const data = imageData.data;
+        const strength = 0.4; // S-curve strength
+        
+        for (let i = 0; i < data.length; i += 4) {
+            // Normalize to 0-1
+            let r = data[i] / 255;
+            let g = data[i + 1] / 255;
+            let b = data[i + 2] / 255;
+            
+            // Apply S-curve: enhance mid-tones, preserve highlights and shadows
+            const sCurve = (t) => {
+                if (t < 0.5) {
+                    return t * (1 - strength) + t * t * strength * 2;
+                } else {
+                    return t * (1 - strength) + (1 - (1 - t) * (1 - t)) * strength;
+                }
+            };
+            
+            r = sCurve(r);
+            g = sCurve(g);
+            b = sCurve(b);
+            
+            // Denormalize
+            data[i] = this.clamp(r * 255);
+            data[i + 1] = this.clamp(g * 255);
+            data[i + 2] = this.clamp(b * 255);
+        }
+    }
+    
+    // Depth and lighting effects (nose highlight, cheek falloff, vignette)
+    applyDepthLighting(imageData, landmarks, skinMask) {
+        const data = imageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+        
+        // Find nose tip for highlight
+        const noseTipIdx = 4; // MediaPipe nose tip landmark
+        let noseX = width / 2, noseY = height / 2;
+        if (landmarks && landmarks[noseTipIdx]) {
+            noseX = landmarks[noseTipIdx].x * width;
+            noseY = landmarks[noseTipIdx].y * height;
+        }
+        
+        // Find cheek points for falloff
+        const leftCheekIdx = 234;
+        const rightCheekIdx = 454;
+        let leftCheekX = width * 0.3, leftCheekY = height * 0.5;
+        let rightCheekX = width * 0.7, rightCheekY = height * 0.5;
+        if (landmarks && landmarks[leftCheekIdx]) {
+            leftCheekX = landmarks[leftCheekIdx].x * width;
+            leftCheekY = landmarks[leftCheekIdx].y * height;
+        }
+        if (landmarks && landmarks[rightCheekIdx]) {
+            rightCheekX = landmarks[rightCheekIdx].x * width;
+            rightCheekY = landmarks[rightCheekIdx].y * height;
+        }
+        
+        for (let i = 0; i < data.length; i += 4) {
+            const x = (i / 4) % width;
+            const y = Math.floor((i / 4) / width);
+            const idx = y * width + x;
+            const skinValue = skinMask[idx] || 0;
+            
+            if (skinValue > 0.1) {
+                // Nose highlight
+                const distToNose = Math.sqrt((x - noseX) ** 2 + (y - noseY) ** 2);
+                const noseHighlight = Math.max(0, 1 - distToNose / 40) * 0.15; // Subtle highlight
+                
+                // Cheek falloff
+                const distToLeftCheek = Math.sqrt((x - leftCheekX) ** 2 + (y - leftCheekY) ** 2);
+                const distToRightCheek = Math.sqrt((x - rightCheekX) ** 2 + (y - rightCheekY) ** 2);
+                const minCheekDist = Math.min(distToLeftCheek, distToRightCheek);
+                const cheekFalloff = Math.max(0, 1 - minCheekDist / 80) * 0.1; // Subtle falloff
+                
+                // Apply lighting
+                const highlight = noseHighlight - cheekFalloff;
+                data[i] = this.clamp(data[i] + highlight * 30);
+                data[i + 1] = this.clamp(data[i + 1] + highlight * 30);
+                data[i + 2] = this.clamp(data[i + 2] + highlight * 30);
+            }
+        }
+        
+        // Soft vignette (barely visible)
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const maxDist = Math.sqrt(centerX ** 2 + centerY ** 2);
+        
+        for (let i = 0; i < data.length; i += 4) {
+            const x = (i / 4) % width;
+            const y = Math.floor((i / 4) / width);
+            const dist = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+            const vignette = Math.pow(dist / maxDist, 1.5) * 0.08; // Very subtle
+            
+            data[i] = this.clamp(data[i] * (1 - vignette));
+            data[i + 1] = this.clamp(data[i + 1] * (1 - vignette));
+            data[i + 2] = this.clamp(data[i + 2] * (1 - vignette));
+        }
+    }
+    
+    // Temporal color stability (smooth colors across frames)
+    applyTemporalColorSmoothing(imageData, lastFrameData) {
+        const data = imageData.data;
+        const alpha = this.colorSmoothingAlpha; // Blend factor
+        
+        for (let i = 0; i < data.length; i += 4) {
+            data[i] = this.lerp(lastFrameData[i], data[i], 1 - alpha);
+            data[i + 1] = this.lerp(lastFrameData[i + 1], data[i + 1], 1 - alpha);
+            data[i + 2] = this.lerp(lastFrameData[i + 2], data[i + 2], 1 - alpha);
+        }
+    }
+    
+    // Adaptive softness: sharp features (eyes, nose, lips), soft skin
+    applyAdaptiveSoftness(imageData, skinMask, eyeMask, lipMask) {
+        const data = imageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+        const tempData = new Uint8ClampedArray(data);
+        const radius = 2; // Light blur radius
+        
+        for (let y = radius; y < height - radius; y++) {
+            for (let x = radius; x < width - radius; x++) {
+                const idx = (y * width + x) * 4;
+                const maskIdx = y * width + x;
+                
+                const skinValue = skinMask[maskIdx] || 0;
+                const eyeValue = eyeMask[maskIdx] || 0;
+                const lipValue = lipMask[maskIdx] || 0;
+                
+                // Only apply softness to skin, keep features sharp
+                if (skinValue > 0.1 && eyeValue < 0.1 && lipValue < 0.1) {
+                    let rSum = 0, gSum = 0, bSum = 0, count = 0;
+                    
+                    // Light Gaussian blur
+                    for (let dy = -radius; dy <= radius; dy++) {
+                        for (let dx = -radius; dx <= radius; dx++) {
+                            const dist = Math.sqrt(dx * dx + dy * dy);
+                            if (dist <= radius) {
+                                const nIdx = ((y + dy) * width + (x + dx)) * 4;
+                                const weight = Math.exp(-dist * dist / (2 * radius * radius));
+                                rSum += tempData[nIdx] * weight;
+                                gSum += tempData[nIdx + 1] * weight;
+                                bSum += tempData[nIdx + 2] * weight;
+                                count += weight;
+                            }
+                        }
+                    }
+                    
+                    if (count > 0) {
+                        // Blend: 70% blurred, 30% original for subtle softness
+                        data[idx] = data[idx] * 0.3 + (rSum / count) * 0.7;
+                        data[idx + 1] = data[idx + 1] * 0.3 + (gSum / count) * 0.7;
+                        data[idx + 2] = data[idx + 2] * 0.3 + (bSum / count) * 0.7;
+                    }
+                }
+            }
         }
     }
     
