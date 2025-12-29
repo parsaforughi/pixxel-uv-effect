@@ -910,27 +910,8 @@ class UVFaceFilter {
                     const g = data[i + 1];
                     const b = data[i + 2];
                     
-                    // Check if pixel is in person mask
-                    let isPerson = false;
-                    if (personMaskData && personMaskData.data) {
-                        // Scale mask coordinates to image coordinates
-                        const maskX = Math.floor((x / width) * personMaskData.width);
-                        const maskY = Math.floor((y / height) * personMaskData.height);
-                        const maskIdx = (maskY * personMaskData.width + maskX) * 4;
-                        // MediaPipe segmentation mask uses grayscale - check any channel
-                        const maskValue = personMaskData.data[maskIdx]; // R channel (grayscale)
-                        isPerson = maskValue > 128; // Threshold for person detection
-                    } else {
-                        // If no segmentation mask available, apply UV to everything (fallback)
-                        isPerson = true;
-                    }
-                    
-                    // BACKGROUND PROCESSING - Keep normal, no processing
-                    if (!isPerson) {
-                        // Keep background as original - no processing
-                        // Background stays normal, only person gets UV filter
-                        continue;
-                    }
+                    // Apply UV filter to all pixels (no segmentation)
+                    // All pixels get UV filter - simple color inversion
                     
                     // PERSON/SKIN PROCESSING - Apply UV filter
                     // Detect sunscreen
