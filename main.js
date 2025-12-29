@@ -70,6 +70,7 @@ class UVFaceFilter {
         deepLog('CONSTRUCTOR', 'Canvas context', { context: !!this.ctx });
         
         this.faceMesh = null;
+        this.selfieSegmentation = null;
         this.camera = null;
         this.isProcessing = false;
         this.animationFrame = null;
@@ -85,6 +86,8 @@ class UVFaceFilter {
         this.renderLoopActive = false;
         this.lastLandmarks = null; // Store last detected landmarks for continuous rendering
         this.faceMeshSetupAttempted = false; // Prevent multiple FaceMesh setups
+        this.lastSegmentationMask = null; // Store last segmentation mask
+        this.segmentationSetupAttempted = false;
         
         // Face mesh landmarks
         this.skinLandmarks = this.getSkinLandmarks();
@@ -456,8 +459,12 @@ class UVFaceFilter {
                     this.setupCanvas();
                     this.videoReady = true;
                     
-                    // Start UV filter render loop immediately - no face detection needed
-                    // UV filter applies to entire camera feed like a UV camera
+                    // Setup segmentation for person/background separation
+                    if (!this.segmentationSetupAttempted) {
+                        this.setupSelfieSegmentation();
+                    }
+                    
+                    // Start UV filter render loop immediately
                     if (!this.renderLoopActive) {
                         deepLog('VIDEO_EVENT', 'Starting UV camera filter render loop');
                         this.startImmediateFallback();
@@ -565,6 +572,62 @@ class UVFaceFilter {
         // Canvas setup complete
     }
     
+    setupSelfieSegmentation() {
+        deepLog('SEGMENTATION', 'setupSelfieSegmentation() called');
+        
+        if (this.segmentationSetupAttempted) {
+            deepLog('SEGMENTATION', 'Segmentation setup already attempted, skipping');
+            return;
+        }
+        
+        this.segmentationSetupAttempted = true;
+        
+        if (typeof SelfieSegmentation === 'undefined') {
+            deepLog('SEGMENTATION', 'SelfieSegmentation not available, will process without segmentation');
+            return;
+        }
+        
+        try {
+            deepLog('SEGMENTATION', 'Creating SelfieSegmentation instance');
+            this.selfieSegmentation = new SelfieSegmentation({
+                locateFile: (file) => {
+                    const url = `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`;
+                    return url;
+                }
+            });
+            
+            this.selfieSegmentation.setOptions({
+                modelSelection: 1, // 0 = general, 1 = landscape (better for full body)
+                smoothSegmentation: true
+            });
+            
+            this.selfieSegmentation.onResults((results) => {
+                if (results.segmentationMask) {
+                    // Store the segmentation mask for use in filter processing
+                    this.lastSegmentationMask = results.segmentationMask;
+                    deepLog('SEGMENTATION', 'Segmentation mask received', {
+                        width: results.segmentationMask.width,
+                        height: results.segmentationMask.height
+                    });
+                }
+            });
+            
+            // Send frames to segmentation using the same camera utility
+            if (this.camera && this.video) {
+                // We'll send frames in the same onFrame callback as FaceMesh
+                deepLog('SEGMENTATION', 'SelfieSegmentation setup complete');
+            } else {
+                // If camera not ready yet, it will be set up when camera is ready
+                deepLog('SEGMENTATION', 'Camera not ready yet, segmentation will start when camera is ready');
+            }
+        } catch (error) {
+            deepLog('SEGMENTATION', 'ERROR in setupSelfieSegmentation', {
+                name: error.name,
+                message: error.message
+            });
+        }
+    }
+    
     setupFaceMesh() {
         console.log('=== setupFaceMesh() CALLED ===');
         
@@ -662,33 +725,42 @@ class UVFaceFilter {
                             const now = performance.now();
                             if (now - this.lastFrameTime >= this.frameInterval) {
                                 this.lastFrameTime = now;
-                                if (!this.isProcessing && this.faceMesh && this.video.readyState >= this.video.HAVE_CURRENT_DATA) {
+                                if (!this.isProcessing && this.video.readyState >= this.video.HAVE_CURRENT_DATA) {
                                     this.isProcessing = true;
-                                    try {
-                                        // Always try to send to FaceMesh - don't skip if fallback is active
-                                        await this.faceMesh.send({ image: this.video });
-                                        // Reset fail count on success
-                                        this.faceMeshFailCount = 0;
-                                        // Log every 30 frames (once per second at 30fps)
-                                        if (this.frameCount % 30 === 0) {
-                                            console.log('FaceMesh frame sent successfully, frame:', this.frameCount);
-                                        }
-                                    } catch (error) {
-                                        console.error('FaceMesh.send() ERROR:', error);
-                                        deepLog('FACEMESH', 'FaceMesh.send() ERROR', {
-                                            name: error.name,
-                                            message: error.message,
-                                            failCount: this.faceMeshFailCount + 1
-                                        });
-                                        this.faceMeshFailCount++;
-                                        // Switch to fallback after 5 failures (give it more chances)
-                                        if (this.faceMeshFailCount >= 5) {
-                                            console.warn('FaceMesh failures exceeded, staying in fallback mode');
-                                            deepLog('FACEMESH', 'FaceMesh failures exceeded, staying in fallback mode');
-                                            // Don't activate hard fallback - just keep fallback active
-                                            this.fallbackActive = true;
+                                    
+                                    // Send to selfie segmentation for person/background mask
+                                    if (this.selfieSegmentation) {
+                                        try {
+                                            await this.selfieSegmentation.send({ image: this.video });
+                                        } catch (error) {
+                                            deepLog('SEGMENTATION', 'SelfieSegmentation.send() ERROR', {
+                                                name: error.name,
+                                                message: error.message
+                                            });
                                         }
                                     }
+                                    
+                                    // Send to FaceMesh if available
+                                    if (this.faceMesh) {
+                                        try {
+                                            await this.faceMesh.send({ image: this.video });
+                                            this.faceMeshFailCount = 0;
+                                        } catch (error) {
+                                            console.error('FaceMesh.send() ERROR:', error);
+                                            deepLog('FACEMESH', 'FaceMesh.send() ERROR', {
+                                                name: error.name,
+                                                message: error.message,
+                                                failCount: this.faceMeshFailCount + 1
+                                            });
+                                            this.faceMeshFailCount++;
+                                            if (this.faceMeshFailCount >= 5) {
+                                                console.warn('FaceMesh failures exceeded, staying in fallback mode');
+                                                deepLog('FACEMESH', 'FaceMesh failures exceeded, staying in fallback mode');
+                                                this.fallbackActive = true;
+                                            }
+                                        }
+                                    }
+                                    
                                     this.isProcessing = false;
                                 }
                             }
